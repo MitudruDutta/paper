@@ -7,20 +7,18 @@ services:
     # Ports are ignored in host mode
     network_mode: "host"
     environment:
-      - SUPABASE_DB_HOST=db.eirqevwjqzwlxzuvmhvx.supabase.co
-      - SUPABASE_DB_PORT=5432
-      - SUPABASE_DB_NAME=postgres
-      - SUPABASE_DB_USER=postgres
-      - SUPABASE_DB_PASSWORD=root
-      - SUPABASE_DB_SSL=true
-      - REDIS_HOST=localhost
-      - REDIS_PORT=6379
-      - QDRANT_HOST=localhost
-      - QDRANT_PORT=6333
-      - API_PORT=8000
-      - ENV=development
-    env_file:
-      - ../.env
+      - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
+      - SUPABASE_DB_PORT=${SUPABASE_DB_PORT}
+      - SUPABASE_DB_NAME=${SUPABASE_DB_NAME}
+      - SUPABASE_DB_USER=${SUPABASE_DB_USER}
+      - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
+      - SUPABASE_DB_SSL=${SUPABASE_DB_SSL}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - QDRANT_HOST=${QDRANT_HOST}
+      - QDRANT_PORT=${QDRANT_PORT}
+      - API_PORT=${API_PORT}
+      - ENV=${ENV}
     depends_on:
       - redis
       - qdrant
