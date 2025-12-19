@@ -1,0 +1,57 @@
+"""FastAPI dependencies."""
+
+import logging
+from qdrant_client import QdrantClient
+
+from core.config import settings
+
+logger = logging.getLogger(__name__)
+
+qdrant_client: QdrantClient | None = None
+
+
+def init_qdrant() -> None:
+    """Initialize Qdrant client."""
+    global qdrant_client
+    try:
+        qdrant_client = QdrantClient(
+            host=settings.qdrant_host,
+            port=settings.qdrant_port,
+        )
+        qdrant_client.get_collections()
+        logger.info("Qdrant connection established successfully")
+    except Exception as e:
+        logger.error(f"Failed to connect to Qdrant: {e}")
+        raise
+
+
+def close_qdrant() -> None:
+    """Close Qdrant client connection."""
+    global qdrant_client
+    if qdrant_client:
+        try:
+            qdrant_client.close()
+            logger.info("Qdrant connection closed")
+        except Exception as e:
+            logger.error(f"Failed to close Qdrant connection: {e}")
+        finally:
+            qdrant_client = None
+
+
+def check_qdrant_connection() -> bool:
+    """Check if Qdrant is reachable."""
+    try:
+        if qdrant_client:
+            qdrant_client.get_collections()
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Qdrant connection check failed: {e}")
+        return False
+
+
+def get_qdrant() -> QdrantClient:
+    """Get Qdrant client instance."""
+    if qdrant_client is None:
+        raise RuntimeError("Qdrant client not initialized")
+    return qdrant_client

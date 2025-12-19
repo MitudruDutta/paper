@@ -1,0 +1,11 @@
+# Python 3.11+
+
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
+sqlalchemy[asyncio]==2.0.25
+asyncpg==0.29.0
+pydantic==2.6.1
+pydantic-settings==2.1.0
+redis==5.0.1
+qdrant-client==1.7.3
+gunicorn
