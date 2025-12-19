@@ -1,11 +1,30 @@
 """FastAPI dependencies."""
 
 import logging
+from fastapi import Request, HTTPException
 from qdrant_client import QdrantClient
 
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+async def require_services_ready(request: Request) -> None:
+    """
+    Dependency that ensures all required services are ready.
+    Use this in endpoints that depend on backend services.
+    Raises HTTP 503 if services are not ready.
+    """
+    services_ready: bool = getattr(request.app.state, "services_ready", False)
+    if not services_ready:
+        logger.warning(
+            "Request rejected: services not ready",
+            extra={"event": "service_unavailable", "path": request.url.path}
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Service unavailable: backend services not ready"
+        )
 
 qdrant_client: QdrantClient | None = None
 

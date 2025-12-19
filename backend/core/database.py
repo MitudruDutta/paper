@@ -35,7 +35,7 @@ def create_ssl_context() -> ssl.SSLContext:
         if settings.supabase_ca_cert_path:
             try:
                 ssl_context.load_verify_locations(settings.supabase_ca_cert_path)
-            except (FileNotFoundError, ssl.SSLError, Exception) as e:
+            except (FileNotFoundError, ssl.SSLError) as e:
                 logger.error(f"Failed to load SSL certificate from {settings.supabase_ca_cert_path}: {e}")
                 raise RuntimeError(f"Failed to load SSL certificate: {e}") from e
             
