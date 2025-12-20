@@ -2,103 +2,131 @@
 
 A multimodal document processing system with AI capabilities.
 
-## Phase 0 — Infrastructure & Core Skeleton
+## Quick Start
 
-This phase establishes the foundational infrastructure:
+```bash
+# Clone and setup
+git clone <repository-url>
+cd paper
+cp .env.example .env
+# Edit .env with your Supabase credentials
 
-- FastAPI backend running in Docker
-- Supabase PostgreSQL (remote, SSL-enabled)
-- Redis (local container)
-- Qdrant vector database (local container)
-- Health check endpoint verifying all dependencies
-- Automatic database table creation at startup
+# Run
+docker-compose -f infrastructure/docker-compose.yml up --build
+```
 
 ## Tech Stack
 
-- Python 3.11
-- FastAPI + Uvicorn
-- SQLAlchemy 2.x (async) + asyncpg
-- Pydantic v2 + pydantic-settings
-- Redis 7
-- Qdrant
-- Docker + Docker Compose v2
+| Component | Technology |
+|-----------|------------|
+| Backend | Python 3.11, FastAPI, Uvicorn |
+| Database | Supabase PostgreSQL (async via SQLAlchemy 2.x + asyncpg) |
+| Cache | Redis 7 |
+| Vector DB | Qdrant |
+| Validation | Pydantic v2 |
+| Container | Docker + Docker Compose v2 |
 
 ## Prerequisites
 
 - Docker and Docker Compose v2
 - Supabase project with PostgreSQL database
 
-## Setup
+## Configuration
 
-1. Clone the repository:
-
-```bash
-git clone <repository-url>
-cd paper
-```
-
-2. Create environment file from example:
+Create `.env` from the example and configure:
 
 ```bash
 cp .env.example .env
 ```
 
-3. Configure your Supabase credentials in `.env`:
+Required variables:
 
-```
-SUPABASE_DB_HOST=your-project-id.supabase.co
-SUPABASE_DB_PORT=5432
-SUPABASE_DB_NAME=postgres
-SUPABASE_DB_USER=postgres
-SUPABASE_DB_PASSWORD=your_password
-SUPABASE_DB_SSL=true
-```
+| Variable | Description |
+|----------|-------------|
+| `SUPABASE_DB_HOST` | Your Supabase project host |
+| `SUPABASE_DB_PASSWORD` | Database password |
+| `DOCUMENT_STORAGE_PATH` | Path for uploaded files (default: `/data/documents`) |
+| `MAX_UPLOAD_SIZE_MB` | Max upload size in MB (default: `50`) |
 
-## Running the Application
-
-Start all services with a single command:
+## Running
 
 ```bash
+# Start all services
 docker-compose -f infrastructure/docker-compose.yml up --build
-```
 
-To run in detached mode:
-
-```bash
+# Detached mode
 docker-compose -f infrastructure/docker-compose.yml up --build -d
-```
 
-To stop all services:
-
-```bash
+# Stop
 docker-compose -f infrastructure/docker-compose.yml down
 ```
 
-## Verifying Health
+## API Reference
 
-### API Root
+### Health & Status
 
-```bash
-curl http://localhost:8000/
-```
-
-Expected response:
-
-```json
-{
-  "name": "Paper API",
-  "version": "0.0.1"
-}
-```
-
-### Health Check
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | API info |
+| `/health` | GET | Service health check |
 
 ```bash
+# Check health
 curl http://localhost:8000/health
 ```
 
-Expected response (all healthy):
+### Documents
 
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/documents/upload` | POST | Upload PDF |
+| `/documents` | GET | List all documents |
+| `/documents/{id}` | GET | Get document details |
+
+#### Upload
+
+```bash
+curl -X POST http://localhost:8000/documents/upload \
+  -F "file=@document.pdf"
+```
+
+#### List
+
+```bash
+curl http://localhost:8000/documents
+```
+
+#### Get Details
+
+```bash
+curl http://localhost:8000/documents/{document_id}
+```
+
+### Response Examples
+
+**Upload Success:**
+```json
+{
+  "document_id": "550e8400-e29b-41d4-a716-446655440000",
+  "filename": "document.pdf",
+  "status": "validated"
+}
+```
+
+**Document Details:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "filename": "document.pdf",
+  "file_size": 1048576,
+  "mime_type": "application/pdf",
+  "page_count": 10,
+  "status": "validated",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Health Check:**
 ```json
 {
   "status": "ok",
@@ -110,104 +138,29 @@ Expected response (all healthy):
 }
 ```
 
-If any service is unreachable, returns HTTP 503:
+## Document Lifecycle
 
-```json
-{
-  "status": "degraded",
-  "services": {
-    "database": "unreachable",
-    "redis": "connected",
-    "qdrant": "connected"
-  }
-}
+```
+Upload → Validation → validated / failed
 ```
 
-### Qdrant Dashboard
+- **validated**: PDF is valid and stored
+- **failed**: PDF rejected (corrupted, password-protected, or invalid)
 
-Access the Qdrant dashboard at: http://localhost:6333/dashboard
+## Storage
 
-## Phase 1 — Document Ingestion & Storage
+- Files stored in Docker volume at `/data/documents`
+- Persists across container restarts
+- Max file size: 50 MB (configurable)
+- Supported format: PDF only
 
-Phase 1 adds document upload, validation, and storage capabilities:
+## External Services
 
-- Upload PDF documents via REST API
-- Validate PDF integrity (reject corrupted/password-protected files)
-- Store files persistently on disk (Docker volume)
-- Track document metadata in Supabase PostgreSQL
-- Document status lifecycle: `uploaded` → `validated` / `failed`
-
-### Upload a Document
-
-```bash
-curl -X POST http://localhost:8000/documents/upload \
-  -F "file=@/path/to/your/document.pdf"
-```
-
-Success response:
-
-```json
-{
-  "document_id": "550e8400-e29b-41d4-a716-446655440000",
-  "filename": "document.pdf",
-  "status": "validated"
-}
-```
-
-Error response (invalid PDF):
-
-```json
-{
-  "error": "Invalid PDF file",
-  "detail": "Password-protected PDFs are not supported"
-}
-```
-
-### List Documents
-
-```bash
-curl http://localhost:8000/documents
-```
-
-Response:
-
-```json
-[
-  {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "filename": "document.pdf",
-    "status": "validated",
-    "file_size": 1048576,
-    "created_at": "2024-01-15T10:30:00Z"
-  }
-]
-```
-
-### Get Document Details
-
-```bash
-curl http://localhost:8000/documents/550e8400-e29b-41d4-a716-446655440000
-```
-
-Response:
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "filename": "document.pdf",
-  "stored_filename": "550e8400-e29b-41d4-a716-446655440000.pdf",
-  "file_size": 1048576,
-  "mime_type": "application/pdf",
-  "page_count": 10,
-  "status": "validated",
-  "error_message": null,
-  "created_at": "2024-01-15T10:30:00Z"
-}
-```
-
-### File Storage
-
-Uploaded files are stored in a Docker volume mounted at `/data/documents`. Files persist across container restarts.
+| Service | URL |
+|---------|-----|
+| API | http://localhost:8000 |
+| API Docs | http://localhost:8000/docs |
+| Qdrant Dashboard | http://localhost:6333/dashboard |
 
 ## Project Structure
 
@@ -216,10 +169,10 @@ paper/
 ├── backend/
 │   ├── api/
 │   │   ├── main.py
-│   │   ├── routes/
-│   │   │   ├── health.py
-│   │   │   └── documents.py
-│   │   └── dependencies.py
+│   │   ├── dependencies.py
+│   │   └── routes/
+│   │       ├── health.py
+│   │       └── documents.py
 │   ├── core/
 │   │   ├── config.py
 │   │   ├── database.py
@@ -234,6 +187,5 @@ paper/
 ├── infrastructure/
 │   └── docker-compose.yml
 ├── .env.example
-├── .gitignore
 └── README.md
 ```
