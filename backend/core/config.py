@@ -1,7 +1,9 @@
 """Application configuration using pydantic-settings."""
 
 import urllib.parse
+from pathlib import Path
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,7 +34,6 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 1800
     db_pool_pre_ping: bool = True
 
-
     # Redis
     redis_host: str = "redis"
     redis_port: int = 6379
@@ -47,6 +48,29 @@ class Settings(BaseSettings):
 
     # API
     api_port: int = 8000
+
+    # Document Storage
+    document_storage_path: str = "/data/documents"
+    max_upload_size_mb: int = 50
+
+    @field_validator('document_storage_path')
+    @classmethod
+    def validate_storage_path(cls, v: str) -> str:
+        """Ensure document storage path is absolute."""
+        path = Path(v)
+        if not path.is_absolute():
+            raise ValueError(f"document_storage_path must be absolute, got: {v}")
+        return v
+
+    @field_validator('max_upload_size_mb')
+    @classmethod
+    def validate_upload_size(cls, v: int) -> int:
+        """Ensure upload size is positive and reasonable."""
+        if v <= 0:
+            raise ValueError(f"max_upload_size_mb must be positive, got: {v}")
+        if v > 5000:
+            raise ValueError(f"max_upload_size_mb exceeds maximum (5000 MB), got: {v}")
+        return v
 
     @property
     def database_url(self) -> str:

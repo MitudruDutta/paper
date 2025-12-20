@@ -127,6 +127,88 @@ If any service is unreachable, returns HTTP 503:
 
 Access the Qdrant dashboard at: http://localhost:6333/dashboard
 
+## Phase 1 — Document Ingestion & Storage
+
+Phase 1 adds document upload, validation, and storage capabilities:
+
+- Upload PDF documents via REST API
+- Validate PDF integrity (reject corrupted/password-protected files)
+- Store files persistently on disk (Docker volume)
+- Track document metadata in Supabase PostgreSQL
+- Document status lifecycle: `uploaded` → `validated` / `failed`
+
+### Upload a Document
+
+```bash
+curl -X POST http://localhost:8000/documents/upload \
+  -F "file=@/path/to/your/document.pdf"
+```
+
+Success response:
+
+```json
+{
+  "document_id": "550e8400-e29b-41d4-a716-446655440000",
+  "filename": "document.pdf",
+  "status": "validated"
+}
+```
+
+Error response (invalid PDF):
+
+```json
+{
+  "error": "Invalid PDF file",
+  "detail": "Password-protected PDFs are not supported"
+}
+```
+
+### List Documents
+
+```bash
+curl http://localhost:8000/documents
+```
+
+Response:
+
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "filename": "document.pdf",
+    "status": "validated",
+    "file_size": 1048576,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+### Get Document Details
+
+```bash
+curl http://localhost:8000/documents/550e8400-e29b-41d4-a716-446655440000
+```
+
+Response:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "filename": "document.pdf",
+  "stored_filename": "550e8400-e29b-41d4-a716-446655440000.pdf",
+  "file_size": 1048576,
+  "mime_type": "application/pdf",
+  "page_count": 10,
+  "status": "validated",
+  "error_message": null,
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### File Storage
+
+Uploaded files are stored in a Docker volume mounted at `/data/documents`. Files persist across container restarts.
+
 ## Project Structure
 
 ```
@@ -135,13 +217,17 @@ paper/
 │   ├── api/
 │   │   ├── main.py
 │   │   ├── routes/
-│   │   │   └── health.py
+│   │   │   ├── health.py
+│   │   │   └── documents.py
 │   │   └── dependencies.py
 │   ├── core/
 │   │   ├── config.py
 │   │   ├── database.py
-│   │   └── redis.py
+│   │   ├── redis.py
+│   │   └── storage.py
 │   ├── models/
+│   │   └── document.py
+│   ├── schemas/
 │   │   └── document.py
 │   ├── requirements.txt
 │   └── Dockerfile

@@ -2,11 +2,19 @@
 
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, text, Index
+from enum import StrEnum
+from sqlalchemy import Text, DateTime, BigInteger, Integer, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
 from core.database import Base
+
+
+class DocumentStatus(StrEnum):
+    """Document status lifecycle values."""
+    UPLOADED = "uploaded"
+    VALIDATED = "validated"
+    FAILED = "failed"
 
 
 class Document(Base):
@@ -24,21 +32,28 @@ class Document(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    upload_date: Mapped[datetime] = mapped_column(
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    stored_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[DocumentStatus] = mapped_column(
+        Text,
+        nullable=False, 
+        default=DocumentStatus.UPLOADED, 
+        index=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
-    )
-    status: Mapped[str] = mapped_column(
-        String(50), 
-        nullable=False, 
-        default="pending", 
-        index=True
+        index=True,
     )
 
     def __repr__(self) -> str:
         return (
             f"<Document(id={self.id}, filename='{self.filename}', "
-            f"status='{self.status}', upload_date='{self.upload_date.isoformat()}')>"
+            f"status='{self.status}', created_at='{self.created_at.isoformat()}')>"
         )

@@ -8,8 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.database import init_db, close_db
 from core.redis import init_redis, close_redis
+from core.storage import ensure_storage_dir_exists
 from api.dependencies import init_qdrant, close_qdrant
 from api.routes import health
+from api.routes import documents
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,8 +22,17 @@ logger = logging.getLogger(__name__)
 VERSION = "0.0.1"
 
 
-async def _cleanup_on_failure(redis_initialized: bool, qdrant_initialized: bool) -> None:
+async def _cleanup_on_failure(
+    redis_initialized: bool,
+    qdrant_initialized: bool,
+    db_initialized: bool = False,
+) -> None:
     """Clean up successfully initialized services on startup failure."""
+    if db_initialized:
+        try:
+            await close_db()
+        except Exception:
+            pass
     if qdrant_initialized:
         try:
             close_qdrant()
@@ -41,6 +52,7 @@ async def lifespan(app: FastAPI):
     
     redis_initialized = False
     qdrant_initialized = False
+    db_initialized = False
     
     # Required services - fail fast if any cannot initialize
     try:
@@ -57,16 +69,26 @@ async def lifespan(app: FastAPI):
         logger.info("Qdrant initialized")
     except Exception as e:
         logger.critical(f"Qdrant initialization failed: {e}", extra={"service": "qdrant", "event": "startup_failure"})
-        await _cleanup_on_failure(redis_initialized, False)
+        await _cleanup_on_failure(redis_initialized, False, False)
         sys.exit(1)
     
     try:
         from models.document import Document
         await init_db()
+        db_initialized = True
         logger.info("Database initialized")
     except Exception as e:
         logger.critical(f"Database initialization failed: {e}", extra={"service": "database", "event": "startup_failure"})
-        await _cleanup_on_failure(redis_initialized, qdrant_initialized)
+        await _cleanup_on_failure(redis_initialized, qdrant_initialized, False)
+        sys.exit(1)
+    
+    # Ensure storage directory exists
+    try:
+        await ensure_storage_dir_exists()
+        logger.info("Storage directory initialized")
+    except Exception as e:
+        logger.critical(f"Storage initialization failed: {e}", extra={"service": "storage", "event": "startup_failure"})
+        await _cleanup_on_failure(redis_initialized, qdrant_initialized, db_initialized)
         sys.exit(1)
     
     # All required services initialized
@@ -116,6 +138,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(documents.router)
 
 
 @app.get("/")
