@@ -29,7 +29,6 @@ class DocumentDetail(BaseModel):
     """Full document metadata response."""
     id: uuid.UUID
     filename: str
-    stored_filename: str | None
     file_size: int | None
     mime_type: str | None
     page_count: int | None
