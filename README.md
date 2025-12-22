@@ -352,6 +352,98 @@ Extracted text is stored in the `document_pages` table:
 - Handwritten text has low OCR accuracy
 - Re-extraction skips existing pages (delete pages to re-extract)
 
+## Phase 3: Semantic Chunking & Vector Search
+
+Phase 3 transforms extracted text into searchable knowledge through semantic chunking and vector embeddings.
+
+### How It Works
+
+1. **Chunking**: Document text is split into semantic chunks (500-800 tokens) with overlap
+2. **Embedding**: Each chunk is converted to a 768-dimensional vector using `nomic-embed-text`
+3. **Storage**: Vectors stored in Qdrant, metadata in PostgreSQL
+4. **Search**: Query text is embedded and matched against stored vectors using cosine similarity
+
+### Why Chunking?
+
+- LLMs have context limits - chunks fit within those limits
+- Semantic chunks preserve meaning better than arbitrary splits
+- Overlap ensures context isn't lost at boundaries
+- Page tracking enables source attribution
+
+### Triggering Indexing
+
+```bash
+# Async indexing (recommended)
+curl -X POST http://localhost:8000/documents/{id}/index
+
+# Synchronous indexing
+curl -X POST "http://localhost:8000/documents/{id}/index?sync=true"
+```
+
+**Response:**
+```json
+{
+  "document_id": "uuid",
+  "chunks_created": 21,
+  "status": "indexed"
+}
+```
+
+### Semantic Search
+
+```bash
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "your search query", "top_k": 5}'
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "chunk_id": "uuid",
+      "document_id": "uuid",
+      "content": "Relevant text...",
+      "page_start": 12,
+      "page_end": 13,
+      "score": 0.85
+    }
+  ],
+  "query": "your search query"
+}
+```
+
+### Where Chunks Are Stored
+
+Chunk metadata is stored in the `document_chunks` table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key (also used as Qdrant point ID) |
+| `document_id` | UUID | Reference to parent document |
+| `page_start` | INTEGER | First page of chunk |
+| `page_end` | INTEGER | Last page of chunk |
+| `chunk_index` | INTEGER | Sequential index within document |
+| `content` | TEXT | The chunk text |
+| `token_count` | INTEGER | Estimated token count |
+| `embedding_id` | UUID | Reference to Qdrant vector |
+
+### Prerequisites
+
+- **Ollama** must be running with `nomic-embed-text` model:
+  ```bash
+  OLLAMA_HOST=0.0.0.0 ollama serve &
+  ollama pull nomic-embed-text
+  ```
+
+### Known Limitations
+
+- Requires Ollama running on host (not in Docker)
+- Re-indexing deletes and recreates all chunks
+- No reranking (raw cosine similarity scores)
+- Tables and images are not specially handled
+
 ## API Reference
 
 ### Endpoints Summary
@@ -367,6 +459,8 @@ Extracted text is stored in the `document_pages` table:
 | `GET` | `/documents/{id}/extraction-status` | Get extraction status |
 | `GET` | `/documents/{id}/pages` | List extracted pages |
 | `GET` | `/documents/{id}/pages/{page}` | Get extracted text for a page |
+| `POST` | `/documents/{id}/index` | Trigger chunking and indexing |
+| `POST` | `/search` | Semantic search across documents |
 
 ### Health Check Response Codes
 

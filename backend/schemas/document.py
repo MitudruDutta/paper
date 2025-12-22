@@ -21,6 +21,7 @@ class DocumentListItem(BaseModel):
     status: str
     file_size: int | None
     created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -35,6 +36,7 @@ class DocumentDetail(BaseModel):
     status: str
     error_message: str | None
     created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

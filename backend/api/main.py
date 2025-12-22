@@ -13,6 +13,7 @@ from api.dependencies import init_qdrant, close_qdrant
 from api.routes import health
 from api.routes import documents
 from api.routes import extraction
+from api.routes import retrieval
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
     try:
         from models.document import Document
         from models.document_page import DocumentPage
+        from models.document_chunk import DocumentChunk
         await init_db()
         db_initialized = True
         logger.info("Database initialized")
@@ -142,6 +144,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(documents.router)
 app.include_router(extraction.router)
+app.include_router(retrieval.router)
 
 
 @app.get("/")
