@@ -54,3 +54,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .gemini
+
+# Kiro CLI conversations
+.kiro/
