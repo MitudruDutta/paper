@@ -4,10 +4,13 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Install build deps, curl for healthcheck, install python deps from requirements.txt, then cleanup
+# Install build deps, curl for healthcheck, tesseract for OCR, poppler for pdf2image, install python deps, then cleanup
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     curl \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y --auto-remove gcc \
     && rm -rf /var/lib/apt/lists/*

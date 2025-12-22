@@ -8,7 +8,8 @@ Paper is built as a phased project where each phase adds new capabilities while 
 
 - **Phase 0 (Complete)**: Infrastructure foundation with FastAPI, Supabase PostgreSQL, Redis, and Qdrant
 - **Phase 1 (Complete)**: Document ingestion, validation, and persistent storage
-- **Future Phases**: PDF text extraction, embeddings, vector search, and LLM integration
+- **Phase 2 (Complete)**: Text extraction from native and scanned PDFs with OCR
+- **Future Phases**: Embeddings, vector search, and LLM integration
 
 ## Tech Stack
 
@@ -20,6 +21,7 @@ Paper is built as a phased project where each phase adds new capabilities while 
 | **Cache** | Redis 7 | Session management and future caching needs |
 | **Vector Database** | Qdrant | Future semantic search capabilities |
 | **Validation** | Pydantic v2, PyMuPDF | Request/response validation and PDF integrity checks |
+| **OCR** | Tesseract, pdf2image, Pillow | Text extraction from scanned documents |
 | **Containerization** | Docker + Docker Compose v2 | Consistent development and deployment |
 
 ## Prerequisites
@@ -271,6 +273,85 @@ Documents progress through a simple state machine:
 - File paths are never exposed in API responses
 - Extension whitelist validation (alphanumeric only)
 
+## Phase 2: Text Extraction
+
+Phase 2 adds the ability to extract text from PDF documents, handling both native (text-based) and scanned (image-based) PDFs.
+
+### How It Works
+
+1. **Page Classification**: Each page is analyzed independently to determine if it contains native text or is a scanned image
+2. **Native Extraction**: Pages with embedded text (>50 characters) are extracted using PyMuPDF
+3. **OCR Pipeline**: Scanned pages are converted to images and processed with Tesseract OCR
+4. **Storage**: Extracted text is stored per-page in the `document_pages` table
+
+### Native vs Scanned PDFs
+
+| Type | Detection | Extraction Method | Confidence |
+|------|-----------|-------------------|------------|
+| **Native** | Text length ≥ 50 chars | PyMuPDF `get_text()` | 1.0 (perfect) |
+| **Scanned** | Text length < 50 chars | Tesseract OCR | 0.0-1.0 (varies) |
+
+### Triggering Extraction
+
+```bash
+# Async extraction (recommended for large documents)
+curl -X POST http://localhost:8000/documents/{id}/extract-text
+
+# Synchronous extraction (blocks until complete)
+curl -X POST "http://localhost:8000/documents/{id}/extract-text?sync=true"
+```
+
+**Response:**
+```json
+{
+  "document_id": "uuid",
+  "total_pages": 12,
+  "native_pages": 8,
+  "scanned_pages": 4,
+  "skipped_pages": 0,
+  "failed_pages": 0,
+  "status": "completed"
+}
+```
+
+### Checking Extraction Status
+
+```bash
+curl http://localhost:8000/documents/{id}/extraction-status
+```
+
+### Retrieving Extracted Text
+
+```bash
+# List all pages
+curl http://localhost:8000/documents/{id}/pages
+
+# Get specific page text
+curl http://localhost:8000/documents/{id}/pages/0
+```
+
+### Where Text Is Stored
+
+Extracted text is stored in the `document_pages` table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `document_id` | UUID | Reference to parent document |
+| `page_number` | INTEGER | 0-indexed page number |
+| `page_type` | TEXT | `native` or `scanned` |
+| `extracted_text` | TEXT | The extracted text content |
+| `confidence` | REAL | OCR confidence (1.0 for native) |
+| `created_at` | TIMESTAMPTZ | Extraction timestamp |
+
+### Known Limitations
+
+- OCR results with confidence < 0.6 are discarded
+- Complex layouts may not preserve exact reading order
+- Tables and charts are not specially handled
+- Handwritten text has low OCR accuracy
+- Re-extraction skips existing pages (delete pages to re-extract)
+
 ## API Reference
 
 ### Endpoints Summary
@@ -282,6 +363,10 @@ Documents progress through a simple state machine:
 | `POST` | `/documents/upload` | Upload a PDF document |
 | `GET` | `/documents` | List all documents |
 | `GET` | `/documents/{id}` | Get document details by ID |
+| `POST` | `/documents/{id}/extract-text` | Trigger text extraction |
+| `GET` | `/documents/{id}/extraction-status` | Get extraction status |
+| `GET` | `/documents/{id}/pages` | List extracted pages |
+| `GET` | `/documents/{id}/pages/{page}` | Get extracted text for a page |
 
 ### Health Check Response Codes
 
