@@ -815,3 +815,135 @@ Phase 5 preserves all Phase 4 guarantees:
 - **Rule-based rewriting**: Complex follow-ups may not resolve perfectly
 - **Response time**: Multi-doc queries take 5-15 seconds (parallel retrieval helps)
 - **Max 10 documents**: Per-request limit to prevent context overflow
+
+
+## Phase 6: Multimodal Document Intelligence
+
+Phase 6 adds table and figure understanding, enabling Paper to extract, query, and cite visual elements from documents.
+
+### Features
+
+1. **Table Extraction**: Automatic extraction of bordered and borderless tables
+2. **Figure Analysis**: Detection and description of charts, diagrams, and images
+3. **Table QA**: Programmatic computation on table data (averages, sums, comparisons)
+4. **Multimodal Citations**: Distinct citation formats for text, tables, and figures
+
+### Table Extraction Pipeline
+
+Tables are extracted using a fallback chain:
+
+1. **Camelot (lattice)** - Best for bordered tables
+2. **Camelot (stream)** - Handles borderless tables
+3. **pdfplumber** - Alignment-based fallback
+
+Each extracted table is:
+- Validated for structural consistency
+- Converted to JSON (for computation)
+- Converted to Markdown (for embedding/QA)
+- Stored with page reference
+
+### Figure Analysis
+
+Figures are detected using PyMuPDF image extraction and analyzed using a vision model (LLaVA via Ollama):
+
+- **Detection**: Identifies significant images (>10% of page)
+- **Classification**: bar_chart, line_chart, pie_chart, diagram, flowchart, etc.
+- **Description**: Grounded, factual description without invented numbers
+
+### Extracting Visuals
+
+```bash
+# Extract tables and figures from a document
+curl -X POST http://localhost:8000/documents/{id}/extract-visuals \
+  -H "Content-Type: application/json" \
+  -d '{"force": false}'
+```
+
+**Response:**
+```json
+{
+  "document_id": "uuid",
+  "tables_extracted": 5,
+  "figures_extracted": 3,
+  "pages_processed": 20,
+  "status": "completed"
+}
+```
+
+### Listing Extracted Elements
+
+```bash
+# List tables
+curl http://localhost:8000/documents/{id}/tables
+
+# List figures
+curl http://localhost:8000/documents/{id}/figures
+```
+
+### Table QA
+
+When asking questions about tables, Paper:
+1. Detects table-related intent (average, sum, max, min, count)
+2. Converts table to pandas DataFrame
+3. Performs computation programmatically
+4. Returns result with table citation
+
+**Example:**
+```
+Q: "What is the average revenue?"
+→ Computation: mean(revenue_column)
+→ Answer: "The average revenue is $150M [Table, Page 5]"
+```
+
+### Citation Formats
+
+| Source Type | Format |
+|-------------|--------|
+| Text | `[Page X]` |
+| Table | `[Table, Page X]` |
+| Figure | `[Figure, Page X]` |
+
+### Database Tables (Phase 6)
+
+```sql
+-- Extracted tables
+create table document_tables (
+    id uuid primary key default gen_random_uuid(),
+    document_id uuid not null references documents(id) on delete cascade,
+    page_number integer not null,
+    title text,
+    row_count integer not null,
+    column_count integer not null,
+    table_data jsonb not null,
+    markdown_repr text not null,
+    created_at timestamptz not null default now()
+);
+
+-- Extracted figures
+create table document_figures (
+    id uuid primary key default gen_random_uuid(),
+    document_id uuid not null references documents(id) on delete cascade,
+    page_number integer not null,
+    figure_type text not null,
+    description text not null,
+    extracted_data jsonb,
+    created_at timestamptz not null default now()
+);
+```
+
+### Hallucination Safety
+
+Phase 6 maintains zero-hallucination guarantees:
+
+- **Tables**: All values come from programmatic extraction, not LLM generation
+- **Figures**: Descriptions are grounded; numeric values only if clearly visible
+- **Refusal**: If table extraction fails, system refuses rather than guessing
+- **Citations**: Every table/figure reference includes page number
+
+### Known Limitations
+
+- **Complex tables**: Merged cells and nested tables may not extract perfectly
+- **Handwritten content**: OCR-dependent, lower accuracy
+- **Chart data extraction**: Only extracts values if clearly visible in image
+- **Vision model required**: Figure analysis needs LLaVA or similar via Ollama
+- **Processing time**: Visual extraction is async, may take 1-2 minutes for large documents

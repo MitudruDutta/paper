@@ -9,9 +9,9 @@ from core.redis import get_redis
 logger = logging.getLogger(__name__)
 
 # Rate limit settings
-RATE_LIMIT_REQUESTS = 10  # requests per window
+RATE_LIMIT_REQUESTS = 60  # requests per window
 RATE_LIMIT_WINDOW = 60  # seconds
-QA_RATE_LIMIT_REQUESTS = 5  # stricter for QA (LLM calls)
+QA_RATE_LIMIT_REQUESTS = 20  # stricter for QA (LLM calls)
 QA_RATE_LIMIT_WINDOW = 60
 
 

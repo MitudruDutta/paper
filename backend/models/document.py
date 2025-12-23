@@ -57,6 +57,10 @@ class Document(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    # Visual extraction tracking
+    visual_extraction_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    visual_pages_processed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visual_extraction_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return (

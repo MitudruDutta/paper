@@ -17,6 +17,7 @@ from api.routes import extraction
 from api.routes import retrieval
 from api.routes import qa
 from api.routes import advanced_qa
+from api.routes import multimodal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +85,8 @@ async def lifespan(app: FastAPI):
         from models.qa_query import QAQuery
         from models.qa_conversation import QAConversation
         from models.qa_message import QAMessage
+        from models.document_table import DocumentTable
+        from models.document_figure import DocumentFigure
         await init_db()
         db_initialized = True
         logger.info("Database initialized")
@@ -156,6 +159,7 @@ app.include_router(extraction.router)
 app.include_router(retrieval.router)
 app.include_router(qa.router)
 app.include_router(advanced_qa.router)
+app.include_router(multimodal.router)
 
 
 @app.get("/")

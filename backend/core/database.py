@@ -63,6 +63,9 @@ async_session_maker = async_sessionmaker(
     expire_on_commit=False,
 )
 
+# Alias for background tasks that need to create their own sessions
+async_session_factory = async_session_maker
+
 
 async def init_db() -> None:
     """Initialize database tables."""
