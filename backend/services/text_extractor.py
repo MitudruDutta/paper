@@ -45,6 +45,8 @@ class ExtractionResult:
     scanned_pages: int
     skipped_pages: int
     failed_pages: int
+    low_confidence_pages: int
+    avg_confidence: float | None
     status: str
 
 
@@ -263,6 +265,8 @@ async def extract_document_text(
     scanned_count = 0
     skipped_count = len(existing_pages)
     failed_count = 0
+    low_confidence_count = 0
+    confidences = []
     
     # Get total pages (quick open/close)
     with fitz.open(str(path)) as doc:
@@ -304,6 +308,10 @@ async def extract_document_text(
                     batch_native += 1
                 else:
                     batch_scanned += 1
+                    if result.confidence is not None:
+                        confidences.append(result.confidence)
+                        if result.confidence < 0.7:
+                            low_confidence_count += 1
                 
                 logger.debug(
                     f"Page {result.page_number}: {result.page_type.value}, "
@@ -336,8 +344,10 @@ async def extract_document_text(
     logger.info(
         f"Extraction complete for {document_id}: "
         f"native={native_count}, scanned={scanned_count}, "
-        f"skipped={skipped_count}, failed={failed_count}"
+        f"skipped={skipped_count}, failed={failed_count}, low_conf={low_confidence_count}"
     )
+    
+    avg_conf = sum(confidences) / len(confidences) if confidences else None
     
     return ExtractionResult(
         document_id=document_id,
@@ -346,5 +356,7 @@ async def extract_document_text(
         scanned_pages=scanned_count,
         skipped_pages=skipped_count,
         failed_pages=failed_count,
+        low_confidence_pages=low_confidence_count,
+        avg_confidence=round(avg_conf, 3) if avg_conf else None,
         status=status,
     )

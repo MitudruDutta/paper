@@ -9,11 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.database import init_db, close_db
 from core.redis import init_redis, close_redis
 from core.storage import ensure_storage_dir_exists
+from core.rate_limit import RateLimitMiddleware
 from api.dependencies import init_qdrant, close_qdrant
 from api.routes import health
 from api.routes import documents
 from api.routes import extraction
 from api.routes import retrieval
+from api.routes import qa
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +80,7 @@ async def lifespan(app: FastAPI):
         from models.document import Document
         from models.document_page import DocumentPage
         from models.document_chunk import DocumentChunk
+        from models.qa_query import QAQuery
         await init_db()
         db_initialized = True
         logger.info("Database initialized")
@@ -141,10 +144,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting (after CORS)
+app.add_middleware(RateLimitMiddleware)
+
 app.include_router(health.router)
 app.include_router(documents.router)
 app.include_router(extraction.router)
 app.include_router(retrieval.router)
+app.include_router(qa.router)
 
 
 @app.get("/")

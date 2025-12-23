@@ -76,6 +76,8 @@ async def extract_text(
             scanned_pages=extraction_result.scanned_pages,
             skipped_pages=extraction_result.skipped_pages,
             failed_pages=extraction_result.failed_pages,
+            low_confidence_pages=extraction_result.low_confidence_pages,
+            avg_confidence=extraction_result.avg_confidence,
             status=extraction_result.status,
         )
     

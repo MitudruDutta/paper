@@ -9,7 +9,8 @@ Paper is built as a phased project where each phase adds new capabilities while 
 - **Phase 0 (Complete)**: Infrastructure foundation with FastAPI, Supabase PostgreSQL, Redis, and Qdrant
 - **Phase 1 (Complete)**: Document ingestion, validation, and persistent storage
 - **Phase 2 (Complete)**: Text extraction from native and scanned PDFs with OCR
-- **Future Phases**: Embeddings, vector search, and LLM integration
+- **Phase 3 (Complete)**: Semantic chunking and vector indexing for retrieval
+- **Phase 4 (Complete)**: RAG-based question answering with citations
 
 ## Tech Stack
 
@@ -444,6 +445,90 @@ Chunk metadata is stored in the `document_chunks` table:
 - No reranking (raw cosine similarity scores)
 - Tables and images are not specially handled
 
+## Phase 4: Question Answering with Citations
+
+Phase 4 transforms Paper from a retrieval system into a document question-answering system with verifiable citations.
+
+### How It Works
+
+1. **Question Input**: User asks a question about a specific document
+2. **Retrieval**: System embeds the question and retrieves the top 5 most relevant chunks
+3. **Context Assembly**: Retrieved chunks are formatted with page references
+4. **LLM Generation**: Local LLM (Llama 3.1 8B) generates an answer using only the provided context
+5. **Citation Validation**: All page citations in the answer are verified against retrieved chunks
+6. **Response**: Answer is returned with source attribution
+
+### Citation System
+
+Every factual statement in an answer must include a citation in the format:
+- `[Page X]` for single-page references
+- `[Pages X-Y]` for multi-page references
+
+Citations are validated against the actual retrieved chunks. If any citation references a page not in the retrieved context, the answer is regenerated.
+
+### Hallucination Prevention
+
+Paper prevents hallucinations through multiple mechanisms:
+
+1. **Strict System Prompt**: The LLM is instructed to only use provided context
+2. **Citation Requirement**: Every claim must be cited
+3. **Citation Validation**: Invalid citations trigger regeneration
+4. **Refusal Capability**: If information isn't found, the system explicitly says so
+5. **No External Knowledge**: The LLM cannot use training data for answers
+
+### Asking Questions
+
+```bash
+curl -X POST http://localhost:8000/documents/{document_id}/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the main topic of this document?"}'
+```
+
+**Success Response:**
+```json
+{
+  "answer": "The document discusses machine learning deployment strategies [Page 5]. It covers CI/CD pipelines for ML models [Pages 12-14] and monitoring best practices [Page 20].",
+  "sources": [
+    {"page_start": 5, "page_end": 5, "chunk_id": "uuid"},
+    {"page_start": 12, "page_end": 14, "chunk_id": "uuid"},
+    {"page_start": 20, "page_end": 20, "chunk_id": "uuid"}
+  ]
+}
+```
+
+**Insufficient Context Response:**
+```json
+{
+  "answer": "I cannot find this information in the provided document.",
+  "sources": []
+}
+```
+
+### LLM Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Primary Model | `llama3.1:8b` | Local Ollama model |
+| Fallback Model | `gpt-4o-mini` | Used only if local fails |
+| Temperature | 0.2 | Low for deterministic outputs |
+| Max Tokens | 800 | Maximum answer length |
+
+### Prerequisites
+
+Ollama must be running with the Llama 3.1 model:
+```bash
+OLLAMA_HOST=0.0.0.0 ollama serve &
+ollama pull llama3.1:8b
+```
+
+### Known Limitations
+
+- Single document queries only (no cross-document synthesis)
+- No conversation memory (each question is independent)
+- No streaming responses
+- Tables and charts are not specially handled
+- Maximum question length: 500 characters
+
 ## API Reference
 
 ### Endpoints Summary
@@ -461,6 +546,7 @@ Chunk metadata is stored in the `document_chunks` table:
 | `GET` | `/documents/{id}/pages/{page}` | Get extracted text for a page |
 | `POST` | `/documents/{id}/index` | Trigger chunking and indexing |
 | `POST` | `/search` | Semantic search across documents |
+| `POST` | `/documents/{id}/ask` | Ask a question about a document |
 
 ### Health Check Response Codes
 

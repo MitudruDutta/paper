@@ -13,9 +13,6 @@ MIN_CHUNK_SIZE = 500
 MAX_CHUNK_SIZE = 800
 OVERLAP_SIZE = 125  # tokens (middle of 100-150 range)
 
-# Approximate tokens per character (for English text)
-CHARS_PER_TOKEN = 4
-
 # Recursion safety
 MAX_RECURSION_DEPTH = 10
 
@@ -38,15 +35,29 @@ class Chunk:
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count from text length."""
-    return len(text) // CHARS_PER_TOKEN
+    """
+    Estimate token count using word-based heuristic.
+    More accurate than char/4 for English text.
+    
+    Approximation: ~1.3 tokens per word for English
+    """
+    words = len(text.split())
+    # Add extra for punctuation and special chars
+    special_chars = len(re.findall(r'[^\w\s]', text))
+    return int(words * 1.3 + special_chars * 0.5)
+
+
+def tokens_to_chars(tokens: int) -> int:
+    """Convert token estimate to character count."""
+    # Average ~4 chars per token for English
+    return tokens * 4
 
 
 def _fallback_split(text: str) -> list[str]:
     """Fallback split when recursion limit reached. Uses overlap for continuity."""
     result = []
-    chunk_chars = MAX_CHUNK_SIZE * CHARS_PER_TOKEN
-    overlap_chars = OVERLAP_SIZE * CHARS_PER_TOKEN
+    chunk_chars = tokens_to_chars(MAX_CHUNK_SIZE)
+    overlap_chars = tokens_to_chars(OVERLAP_SIZE)
     step = chunk_chars - overlap_chars
     for i in range(0, len(text), step):
         part = text[i:i + chunk_chars]
@@ -167,7 +178,7 @@ def create_overlapping_chunks(
                 chunk_index += 1
             
             # Start new chunk with overlap
-            overlap_chars = overlap_size * CHARS_PER_TOKEN
+            overlap_chars = tokens_to_chars(overlap_size)
             if len(current_content) > overlap_chars:
                 # Find sentence boundary for overlap
                 overlap_text = current_content[-overlap_chars:]

@@ -21,6 +21,8 @@ class ExtractionResponse(BaseModel):
     scanned_pages: int
     skipped_pages: int
     failed_pages: int
+    low_confidence_pages: int = 0  # Pages with OCR confidence < 0.7
+    avg_confidence: float | None = None
     status: str
 
     model_config = ConfigDict(from_attributes=True)
