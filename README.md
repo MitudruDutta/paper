@@ -11,6 +11,7 @@ Paper is built as a phased project where each phase adds new capabilities while 
 - **Phase 2 (Complete)**: Text extraction from native and scanned PDFs with OCR
 - **Phase 3 (Complete)**: Semantic chunking and vector indexing for retrieval
 - **Phase 4 (Complete)**: RAG-based question answering with citations
+- **Phase 5 (Complete)**: Multi-document QA, follow-up questions, and confidence scoring
 
 ## Tech Stack
 
@@ -671,3 +672,146 @@ docker volume ls | grep document_data
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Phase 5: Advanced QA
+
+Phase 5 extends Paper from single-document QA to a document reasoning system with conversation memory, multi-document comparison, and confidence scoring.
+
+### Features
+
+1. **Follow-up Questions**: Understands implicit references in conversation
+2. **Multi-Document QA**: Query across multiple documents with clear source attribution
+3. **Confidence Scoring**: Quantified answer reliability (0.0-1.0)
+
+### How Follow-ups Work
+
+Paper maintains conversation context and resolves coreferences:
+
+```
+Q1: "What was the revenue in Q3?"
+A1: "Revenue in Q3 was $100M [Page 5]."
+
+Q2: "How does that compare to Q2?"
+→ Resolved to: "How does Q3 revenue compare to Q2 revenue?"
+```
+
+The system:
+- Extracts entities from previous exchanges (Q3, revenue, $100M)
+- Detects references ("that", "it", "those")
+- Rewrites the question to be standalone
+
+### Multi-Document Queries
+
+Query multiple documents simultaneously with clear source separation:
+
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "Compare revenue growth across both reports",
+    "document_ids": ["uuid1", "uuid2"]
+  }'
+```
+
+**Response Format:**
+```json
+{
+  "answer": "Document: Annual_Report_2023.pdf:\n- Revenue grew 15% YoY [Page 12]\n\nDocument: Annual_Report_2024.pdf:\n- Revenue grew 9% YoY [Page 14]\n\nComparison:\n- Revenue growth declined from 15% to 9% year-over-year [Pages 12, 14].",
+  "confidence": 0.84,
+  "sources": [
+    {
+      "document_id": "uuid1",
+      "document_name": "Annual_Report_2023.pdf",
+      "page_start": 12,
+      "page_end": 12,
+      "chunk_id": "chunk-uuid-1"
+    },
+    {
+      "document_id": "uuid2",
+      "document_name": "Annual_Report_2024.pdf",
+      "page_start": 14,
+      "page_end": 14,
+      "chunk_id": "chunk-uuid-2"
+    }
+  ],
+  "conversation_id": "conv-uuid"
+}
+```
+
+### Confidence Scoring
+
+Confidence reflects answer reliability based on:
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Retrieval relevance | 0-0.4 | Average similarity score of retrieved chunks |
+| Citation coverage | 0-0.3 | Ratio of cited chunks to retrieved chunks |
+| Source diversity | 0-0.2 | Number of distinct pages cited |
+| Multi-doc coverage | 0-0.1 | Whether multiple documents contributed |
+
+**Penalties:**
+- Required regeneration: -0.15 (had citation issues on first attempt)
+
+**Score never reaches 1.0** - maximum is 0.99 for perfect conditions.
+
+### Conversation API
+
+**Start a new conversation:**
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "What is the company revenue?",
+    "document_ids": ["uuid1"]
+  }'
+```
+
+**Continue conversation:**
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "How does that compare to last year?",
+    "document_ids": ["uuid1", "uuid2"],
+    "conversation_id": "returned-conv-uuid"
+  }'
+```
+
+### Database Tables (Phase 5)
+
+```sql
+-- Conversation sessions
+create table qa_conversations (
+    id uuid primary key default gen_random_uuid(),
+    created_at timestamptz not null default now()
+);
+
+-- Conversation messages
+create table qa_messages (
+    id uuid primary key default gen_random_uuid(),
+    conversation_id uuid not null references qa_conversations(id) on delete cascade,
+    role text not null check (role in ('user', 'assistant')),
+    content text not null,
+    cited_pages integer[],
+    document_ids uuid[],
+    created_at timestamptz not null default now()
+);
+```
+
+### Hallucination Safety
+
+Phase 5 preserves all Phase 4 guarantees:
+
+- Every factual claim must have a citation
+- Citations are validated against retrieved chunks
+- Invalid citations trigger regeneration (max 2 retries)
+- Ambiguous comparisons are explicitly refused
+- Synthesis only allowed when both sources are cited
+
+### Known Limitations
+
+- **No cross-document entity resolution**: "Company X" in doc1 and "X Corp" in doc2 are not linked
+- **Conversation memory is lightweight**: Only last exchange used for coreference
+- **Rule-based rewriting**: Complex follow-ups may not resolve perfectly
+- **Response time**: Multi-doc queries take 5-15 seconds (parallel retrieval helps)
+- **Max 10 documents**: Per-request limit to prevent context overflow
