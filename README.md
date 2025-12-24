@@ -11,6 +11,11 @@ Upload any PDF, ask questions in plain English, and get accurate answers with pa
 ### **Dashboard**
 ![Dashboard](docs/dashboard.png)
 
+### **Screenshots**
+![Screenshot 1](docs/screenshot-1.png)
+![Screenshot 2](docs/screenshot-2.png)
+![Screenshot 3](docs/screenshot-3.png)
+
 ## Why Paper Exists
 
 PDFs are everywhere—research papers, financial reports, legal documents, technical manuals. But finding specific information in a 100-page document is painful. Traditional search finds keywords, not meaning. And while LLMs can answer questions, they often hallucinate facts that sound plausible but aren't in the document.
