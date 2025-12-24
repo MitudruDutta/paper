@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import time
 import uuid
 
 import httpx
@@ -15,6 +16,8 @@ from tenacity import retry, stop_after_attempt, retry_if_exception_type, before_
 from api.dependencies import require_services_ready, get_qdrant
 from core.database import get_db
 from core.concurrency import with_llm_limit_or_reject, QueueFullError
+from core.logging import set_document_id, set_phase
+from core.metrics import metrics, MetricNames
 from models.document import Document
 from models.document_chunk import DocumentChunk
 from models.qa_query import QAQuery
@@ -67,8 +70,12 @@ async def ask_question(
     Returns an answer with page-level citations, or a refusal if
     the information is not found in the document.
     """
+    set_document_id(str(document_id))
+    set_phase("qa")
+    start_time = time.perf_counter()
+    
     question_hash = hashlib.sha256(request.question.encode()).hexdigest()[:32]
-    logger.info(f"Question received for document {document_id}, hash={question_hash}, len={len(request.question)}")
+    logger.info(f"Question received", extra={"hash": question_hash, "len": len(request.question)})
     
     # Validate document exists
     doc_result = await db.execute(
@@ -92,6 +99,7 @@ async def ask_question(
         )
     
     # Retrieve relevant chunks (this is fast, no limit needed)
+    retrieval_start = time.perf_counter()
     async with httpx.AsyncClient(timeout=60.0) as http_client:
         search_results = await search_similar(
             qdrant,
@@ -100,11 +108,13 @@ async def ask_question(
             top_k=RETRIEVAL_TOP_K,
             http_client=http_client,
         )
+    retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
     
-    logger.info(f"Retrieved {len(search_results)} chunks")
+    logger.info(f"Retrieved {len(search_results)} chunks", extra={"retrieval_ms": round(retrieval_time_ms, 2)})
     
     if not search_results:
         logger.warning("No chunks retrieved for question")
+        metrics.inc_counter(MetricNames.QA_NO_RESULTS)
         return AnswerResponse(
             answer="I cannot find this information in the provided document.",
             sources=[],
@@ -131,21 +141,27 @@ async def ask_question(
             ))
     
     # Generate answer (with concurrency limit)
+    llm_start = time.perf_counter()
     try:
         async def _generate():
             async with httpx.AsyncClient(timeout=120.0) as http_client:
                 return await answer_question(request.question, chunks, http_client)
         
         qa_result = await with_llm_limit_or_reject(_generate(), timeout=30.0)
+        metrics.inc_counter(MetricNames.LLM_CALLS)
     except QueueFullError:
+        metrics.inc_counter(MetricNames.QA_FAILURE)
         raise HTTPException(
             status_code=503,
             detail="Server busy with other requests. Please try again in a few seconds.",
             headers={"Retry-After": "10"},
         )
+    llm_time_ms = (time.perf_counter() - llm_start) * 1000
     
     if not qa_result.success:
-        logger.error(f"QA failed: {qa_result.error}")
+        logger.error(f"QA failed: {qa_result.error}", extra={"error_type": "llm_failure"})
+        metrics.inc_counter(MetricNames.QA_FAILURE)
+        metrics.inc_counter(MetricNames.LLM_FAILURES)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate answer. Please try again.",
@@ -164,12 +180,11 @@ async def ask_question(
             cited_pages=qa_result.cited_pages,
         )
         await _store_qa_audit(db, qa_query)
-        logger.info(f"Stored QA query with cited pages: {qa_result.cited_pages}")
     except (DataError, OperationalError) as e:
-        logger.error(f"DB error storing QA audit trail: {type(e).__name__}: {e}, cited_pages={qa_result.cited_pages}")
+        logger.error(f"DB error storing QA audit trail: {type(e).__name__}: {e}")
         await db.rollback()
     except Exception as e:
-        logger.error(f"Unexpected error storing QA audit trail: {type(e).__name__}: {e}, cited_pages={qa_result.cited_pages}")
+        logger.error(f"Unexpected error storing QA audit trail: {type(e).__name__}: {e}")
         await db.rollback()
     
     # Build response
@@ -185,6 +200,7 @@ async def ask_question(
     # Determine confidence based on citation coverage
     if not qa_result.cited_pages:
         confidence = "low"  # No citations (refusal or issue)
+        metrics.inc_counter(MetricNames.QA_NO_CITATIONS)
     elif len(qa_result.cited_pages) >= 3:
         confidence = "high"  # Multiple sources
     elif len(qa_result.sources) >= 2:
@@ -192,7 +208,24 @@ async def ask_question(
     else:
         confidence = "medium"  # Single source
     
-    logger.info(f"Returning answer with {len(sources)} sources, confidence={confidence}")
+    # Record metrics
+    total_time_ms = (time.perf_counter() - start_time) * 1000
+    metrics.record_histogram(MetricNames.QA_TIME_MS, total_time_ms)
+    metrics.record_histogram(MetricNames.QA_RETRIEVAL_TIME_MS, retrieval_time_ms)
+    metrics.record_histogram(MetricNames.QA_LLM_TIME_MS, llm_time_ms)
+    metrics.record_histogram(MetricNames.QA_CITATIONS, len(qa_result.cited_pages))
+    metrics.inc_counter(MetricNames.QA_SUCCESS)
+    
+    logger.info(
+        f"QA complete",
+        extra={
+            "duration_ms": round(total_time_ms, 2),
+            "retrieval_ms": round(retrieval_time_ms, 2),
+            "llm_ms": round(llm_time_ms, 2),
+            "citations": len(sources),
+            "confidence": confidence,
+        },
+    )
     
     return AnswerResponse(
         answer=qa_result.answer,

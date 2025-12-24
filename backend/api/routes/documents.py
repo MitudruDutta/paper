@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import require_services_ready
 from core.config import settings
 from core.database import get_db
+from core.logging import set_document_id
+from core.metrics import metrics, MetricNames
 from core.storage import (
     delete_temp_file,
     save_temp_file,
@@ -94,8 +97,13 @@ async def upload_document(
     """
     document_id = uuid.uuid4()
     temp_path: Path | None = None
+    start_time = time.perf_counter()
     
-    logger.info(f"Upload started: {file.filename}, content_type={file.content_type}")
+    logger.info(
+        f"Upload started: {file.filename}",
+        extra={"event": "upload_start", "filename": file.filename},
+    )
+    set_document_id(str(document_id))
     
     try:
         # Validate MIME type
@@ -171,7 +179,20 @@ async def upload_document(
         db.add(document)
         await db.commit()
         
-        logger.info(f"Document created: {document_id}, status={DocumentStatus.VALIDATED.value}")
+        logger.info(
+            f"Document created: {document_id}",
+            extra={
+                "event": "upload_success",
+                "pages": page_count,
+                "size_mb": round(file_size / (1024 * 1024), 2),
+            },
+        )
+        
+        # Record metrics
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        metrics.record_histogram(MetricNames.UPLOAD_TIME_MS, duration_ms)
+        metrics.record_histogram(MetricNames.UPLOAD_SIZE_MB, file_size / (1024 * 1024))
+        metrics.inc_counter(MetricNames.UPLOAD_SUCCESS)
         
         return DocumentUploadResponse(
             document_id=document_id,
@@ -180,9 +201,15 @@ async def upload_document(
         )
         
     except HTTPException:
+        metrics.inc_counter(MetricNames.UPLOAD_FAILURE)
         raise
     except Exception as e:
-        logger.error(f"Upload failed: {e}", exc_info=True)
+        logger.error(
+            f"Upload failed: {e}",
+            extra={"event": "upload_error", "error_type": e.__class__.__name__},
+            exc_info=True,
+        )
+        metrics.inc_counter(MetricNames.UPLOAD_FAILURE)
         if temp_path:
             await delete_temp_file(temp_path)
         raise HTTPException(

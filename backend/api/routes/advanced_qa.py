@@ -1,6 +1,7 @@
 """Advanced QA API endpoints (Phase 5)."""
 
 import logging
+import time
 import uuid
 
 import httpx
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import require_services_ready, get_qdrant
 from core.database import get_db
 from core.concurrency import with_llm_limit_or_reject, QueueFullError
+from core.logging import set_phase
+from core.metrics import metrics, MetricNames
 from models.document import Document
 from models.document_chunk import DocumentChunk
 from schemas.advanced_qa import (
@@ -50,7 +53,13 @@ async def ask_advanced(
     - Follow-up questions with coreference resolution
     - Confidence scoring
     """
-    logger.info(f"Advanced QA: {len(request.document_ids)} docs, conversation={request.conversation_id}")
+    set_phase("qa")
+    start_time = time.perf_counter()
+    
+    logger.info(
+        f"Advanced QA request",
+        extra={"docs": len(request.document_ids), "conversation": str(request.conversation_id)[:8] if request.conversation_id else None},
+    )
     
     # Validate all documents exist and are indexed
     doc_result = await db.execute(
@@ -88,7 +97,7 @@ async def ask_advanced(
     effective_question = context.rewritten_question
     
     if context.needs_rewrite:
-        logger.info(f"Resolved follow-up: '{request.question}' -> '{effective_question}'")
+        logger.info(f"Resolved follow-up", extra={"original": request.question[:50], "resolved": effective_question[:50]})
     
     # Store user message
     await add_message(
@@ -98,6 +107,8 @@ async def ask_advanced(
     
     # Single http client for both retrieval and generation
     conversation_persisted = True
+    retrieval_start = time.perf_counter()
+    
     async with httpx.AsyncClient(timeout=120.0) as http_client:
         # Retrieve from all documents
         retrieval = await retrieve_from_documents(
@@ -107,8 +118,10 @@ async def ask_advanced(
             db,
             http_client,
         )
+        retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
         
         # Generate answer with concurrency limit
+        llm_start = time.perf_counter()
         try:
             async def _generate():
                 return await generate_multi_doc_answer(
@@ -118,15 +131,20 @@ async def ask_advanced(
                 )
             
             qa_result = await with_llm_limit_or_reject(_generate(), timeout=45.0)
+            metrics.inc_counter(MetricNames.LLM_CALLS)
         except QueueFullError:
+            metrics.inc_counter(MetricNames.QA_FAILURE)
             raise HTTPException(
                 status_code=503,
                 detail="Server busy. Please try again in a few seconds.",
                 headers={"Retry-After": "15"},
             )
+        llm_time_ms = (time.perf_counter() - llm_start) * 1000
     
     if not qa_result.success:
-        logger.error(f"Multi-doc QA failed: {qa_result.error}")
+        logger.error(f"Multi-doc QA failed: {qa_result.error}", extra={"error_type": "llm_failure"})
+        metrics.inc_counter(MetricNames.QA_FAILURE)
+        metrics.inc_counter(MetricNames.LLM_FAILURES)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate answer. Please try again.",
@@ -161,9 +179,26 @@ async def ask_advanced(
         for s in qa_result.sources
     ]
     
+    # Record metrics
+    total_time_ms = (time.perf_counter() - start_time) * 1000
+    metrics.record_histogram(MetricNames.QA_TIME_MS, total_time_ms)
+    metrics.record_histogram(MetricNames.QA_RETRIEVAL_TIME_MS, retrieval_time_ms)
+    metrics.record_histogram(MetricNames.QA_LLM_TIME_MS, llm_time_ms)
+    metrics.record_histogram(MetricNames.QA_CITATIONS, len(qa_result.cited_pages))
+    metrics.record_histogram(MetricNames.QA_CONFIDENCE, qa_result.confidence)
+    metrics.inc_counter(MetricNames.QA_SUCCESS)
+    
+    if qa_result.required_regeneration:
+        metrics.inc_counter(MetricNames.QA_REGENERATIONS)
+    
     logger.info(
-        f"Advanced QA complete: confidence={qa_result.confidence}, "
-        f"sources={len(sources)}, conversation={conversation.id}, persisted={conversation_persisted}"
+        f"Advanced QA complete",
+        extra={
+            "duration_ms": round(total_time_ms, 2),
+            "confidence": qa_result.confidence,
+            "sources": len(sources),
+            "persisted": conversation_persisted,
+        },
     )
     
     return AdvancedAnswerResponse(

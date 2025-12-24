@@ -1,6 +1,7 @@
 """Retrieval and indexing API endpoints."""
 
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -10,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import require_services_ready, get_qdrant
 from core.database import get_db, async_session_maker
+from core.logging import set_document_id, set_phase
+from core.metrics import metrics, MetricNames
 from models.document import Document
 from models.document_page import DocumentPage
 from models.document_chunk import DocumentChunk
@@ -214,12 +217,15 @@ async def search(
     db: AsyncSession = Depends(get_db),
 ) -> SearchResponse:
     """Perform semantic search across documents."""
+    set_phase("retrieval")
+    start_time = time.perf_counter()
+    
     qdrant = get_qdrant()
     
     # Build query preview for logging
     query_preview = request.query if len(request.query) <= 50 else request.query[:50] + "..."
     query_preview = query_preview.replace("\n", " ").replace("\r", "")
-    logger.info(f"Search query: '{query_preview}', top_k={request.top_k}")
+    logger.info(f"Search query: '{query_preview}'", extra={"top_k": request.top_k})
     
     # Search Qdrant
     results = await search_similar(
@@ -229,7 +235,11 @@ async def search(
         request.top_k,
     )
     
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    
     if not results:
+        metrics.record_histogram(MetricNames.RETRIEVAL_TIME_MS, duration_ms)
+        metrics.record_histogram(MetricNames.RETRIEVAL_CHUNKS, 0)
         return SearchResponse(results=[], query=request.query)
     
     # Fetch chunk content from database
@@ -241,6 +251,7 @@ async def search(
     
     # Build response
     search_results = []
+    top_score = 0.0
     for chunk_id, score, payload in results:
         chunk = chunk_map.get(chunk_id)
         if chunk:
@@ -252,7 +263,16 @@ async def search(
                 page_end=chunk.page_end,
                 score=score,
             ))
+            top_score = max(top_score, score)
     
-    logger.info(f"Search returned {len(search_results)} results")
+    # Record metrics
+    metrics.record_histogram(MetricNames.RETRIEVAL_TIME_MS, duration_ms)
+    metrics.record_histogram(MetricNames.RETRIEVAL_CHUNKS, len(search_results))
+    metrics.record_histogram(MetricNames.RETRIEVAL_TOP_SCORE, top_score)
+    
+    logger.info(
+        f"Search returned {len(search_results)} results",
+        extra={"duration_ms": round(duration_ms, 2), "top_score": round(top_score, 3)},
+    )
     
     return SearchResponse(results=search_results, query=request.query)

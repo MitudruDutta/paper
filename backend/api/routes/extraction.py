@@ -1,6 +1,7 @@
 """Text extraction API endpoints."""
 
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import require_services_ready
 from core.database import get_db, async_session_maker
+from core.logging import set_document_id, set_phase
+from core.metrics import metrics, MetricNames
 from models.document import Document, DocumentStatus
 from models.document_page import DocumentPage
 from schemas.document_page import (
@@ -26,11 +29,19 @@ router = APIRouter(prefix="/documents", tags=["extraction"])
 
 async def run_extraction_task(document_id: uuid.UUID, pdf_path: str) -> None:
     """Background task for text extraction."""
+    metrics.inc_counter(MetricNames.EXTRACTION_STARTED)
+    start_time = time.monotonic()
+    
     async with async_session_maker() as db:
         try:
             await extract_document_text(document_id, pdf_path, db)
+            metrics.inc_counter(MetricNames.EXTRACTION_SUCCESS)
         except Exception as e:
             logger.error(f"Background extraction failed for {document_id}: {e}")
+            metrics.inc_counter(MetricNames.EXTRACTION_FAILURE)
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000
+            metrics.record_histogram(MetricNames.EXTRACTION_TIME_MS, duration_ms)
 
 
 @router.post(
@@ -49,6 +60,10 @@ async def extract_text(
     
     By default runs in background. Set sync=true for synchronous extraction.
     """
+    set_document_id(str(document_id))
+    set_phase("extraction")
+    start_time = time.perf_counter()
+    
     # Validate document exists
     result = await db.execute(
         select(Document).where(Document.id == document_id)
@@ -64,11 +79,30 @@ async def extract_text(
     if document.status == DocumentStatus.FAILED:
         raise HTTPException(status_code=400, detail="Cannot extract from failed document")
     
-    logger.info(f"Extraction requested for document {document_id}, sync={sync}")
+    logger.info(f"Extraction requested for document {document_id}", extra={"sync": sync})
     
     if sync:
         # Synchronous extraction (for testing or small documents)
         extraction_result = await extract_document_text(document_id, document.file_path, db)
+        
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        metrics.record_histogram(MetricNames.EXTRACTION_TIME_MS, duration_ms)
+        metrics.record_histogram(MetricNames.EXTRACTION_PAGES, extraction_result.total_pages)
+        metrics.record_histogram(MetricNames.EXTRACTION_NATIVE_PAGES, extraction_result.native_pages)
+        metrics.record_histogram(MetricNames.EXTRACTION_SCANNED_PAGES, extraction_result.scanned_pages)
+        if extraction_result.failed_pages > 0:
+            metrics.inc_counter(MetricNames.EXTRACTION_ERRORS, extraction_result.failed_pages)
+        
+        logger.info(
+            f"Extraction complete",
+            extra={
+                "duration_ms": round(duration_ms, 2),
+                "pages": extraction_result.total_pages,
+                "native": extraction_result.native_pages,
+                "scanned": extraction_result.scanned_pages,
+            },
+        )
+        
         return ExtractionResponse(
             document_id=extraction_result.document_id,
             total_pages=extraction_result.total_pages,

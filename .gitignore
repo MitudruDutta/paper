@@ -65,3 +65,5 @@ npm-debug.log*
 # Next.js
 .next/
 .turbo/
+
+results/

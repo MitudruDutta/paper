@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import require_services_ready
 from core.database import get_db
+from core.logging import set_document_id, set_phase
+from core.metrics import metrics, MetricNames
 from core.storage import get_file_path, generate_stored_filename
 from models.document import Document
 from models.document_table import DocumentTable
@@ -51,6 +54,8 @@ async def _extract_visuals_task(
 ):
     """Background task for visual extraction."""
     from core.database import async_session_factory
+    
+    start_time = time.perf_counter()
     
     async with async_session_factory() as db:
         try:
@@ -97,6 +102,7 @@ async def _extract_visuals_task(
                             )
                             db.add(doc_figure)
                             figures_count += 1
+                            metrics.inc_counter(MetricNames.VISION_CALLS)
                         
                         pages_processed += 1
                         
@@ -106,14 +112,21 @@ async def _extract_visuals_task(
                     except Exception as e:
                         logger.error(f"Error processing page {page_num}: {e}")
                         errors.append({"page": page_num, "error": str(e)})
+                        metrics.inc_counter(MetricNames.VISION_FAILURES)
                         await db.rollback()
             
             await db.commit()
             
+            # Record metrics
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            metrics.record_histogram(MetricNames.VISUAL_EXTRACTION_TIME_MS, duration_ms)
+            metrics.inc_counter(MetricNames.TABLES_EXTRACTED, tables_count)
+            metrics.inc_counter(MetricNames.FIGURES_EXTRACTED, figures_count)
+            
             if errors:
                 logger.warning(
-                    f"Visual extraction for {document_id} had {len(errors)} errors. "
-                    f"Examples: {errors[:3]}"
+                    f"Visual extraction had errors",
+                    extra={"document_id": str(document_id), "error_count": len(errors)},
                 )
             
             doc_result = await db.execute(select(Document).where(Document.id == document_id))
@@ -125,8 +138,13 @@ async def _extract_visuals_task(
                 await db.commit()
             
             logger.info(
-                f"Visual extraction complete for {document_id}: "
-                f"{tables_count} tables, {figures_count} figures, {len(errors)} errors"
+                f"Visual extraction complete",
+                extra={
+                    "document_id": str(document_id),
+                    "tables": tables_count,
+                    "figures": figures_count,
+                    "duration_ms": round(duration_ms, 2),
+                },
             )
             
         except Exception as e:
@@ -146,6 +164,11 @@ async def extract_visuals(
     db: AsyncSession = Depends(get_db),
 ) -> ExtractVisualsResponse:
     """Extract tables and figures from a document."""
+    set_document_id(str(document_id))
+    set_phase("multimodal")
+    
+    logger.info(f"Visual extraction requested", extra={"force": request.force})
+    
     doc_result = await db.execute(
         select(Document).where(Document.id == document_id)
     )

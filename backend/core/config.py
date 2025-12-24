@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # Document Storage
     document_storage_path: str = "/data/documents"
     max_upload_size_mb: int = 50
+    
+    # Processing Limits (cost/resource guardrails)
+    max_pages_per_document: int = 500
+    max_chunks_per_document: int = 1000
+    max_qa_context_chunks: int = 10
+    max_vision_calls_per_document: int = 50
+    max_documents_per_qa: int = 10
 
     @field_validator('document_storage_path')
     @classmethod

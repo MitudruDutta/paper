@@ -12,6 +12,8 @@ Paper is built as a phased project where each phase adds new capabilities while 
 - **Phase 3 (Complete)**: Semantic chunking and vector indexing for retrieval
 - **Phase 4 (Complete)**: RAG-based question answering with citations
 - **Phase 5 (Complete)**: Multi-document QA, follow-up questions, and confidence scoring
+- **Phase 6 (Complete)**: Multimodal document intelligence (tables and figures)
+- **Phase 8 (Complete)**: Production hardening with observability, metrics, and evaluation
 
 ## Tech Stack
 
@@ -947,3 +949,224 @@ Phase 6 maintains zero-hallucination guarantees:
 - **Chart data extraction**: Only extracts values if clearly visible in image
 - **Vision model required**: Figure analysis needs LLaVA or similar via Ollama
 - **Processing time**: Visual extraction is async, may take 1-2 minutes for large documents
+
+
+## Phase 8: Production Hardening
+
+Phase 8 transforms Paper from a working prototype into production-ready software with comprehensive observability, metrics, and operational tooling.
+
+### Observability Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Request Flow                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Request → [Middleware] → [Route Handler] → [Service] → Response    │
+│               │                │                │                    │
+│               ▼                ▼                ▼                    │
+│         ┌─────────┐      ┌─────────┐      ┌─────────┐               │
+│         │Request  │      │Structured│     │ Metrics │               │
+│         │Tracking │      │ Logging │      │Collection│              │
+│         └────┬────┘      └────┬────┘      └────┬────┘               │
+│              │                │                │                     │
+│              ▼                ▼                ▼                     │
+│         ┌─────────────────────────────────────────┐                 │
+│         │              Observability              │                 │
+│         │  • request_id tracking                  │                 │
+│         │  • document_id context                  │                 │
+│         │  • phase identification                 │                 │
+│         │  • duration_ms timing                   │                 │
+│         │  • error_type classification            │                 │
+│         └─────────────────────────────────────────┘                 │
+│                              │                                       │
+│              ┌───────────────┼───────────────┐                      │
+│              ▼               ▼               ▼                      │
+│         ┌────────┐     ┌─────────┐     ┌────────┐                   │
+│         │ Sentry │     │  Logs   │     │/metrics│                   │
+│         │ (opt)  │     │ (JSON)  │     │endpoint│                   │
+│         └────────┘     └─────────┘     └────────┘                   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Metrics Tracked
+
+| Category | Metric | Type | Description |
+|----------|--------|------|-------------|
+| **Ingestion** | `upload_size_mb` | Histogram | File size distribution |
+| | `upload_time_ms` | Histogram | Upload latency |
+| | `upload_success/failure` | Counter | Success/failure counts |
+| **Extraction** | `extraction.time_ms` | Histogram | Extraction latency |
+| | `extraction.pages_processed` | Histogram | Pages per document |
+| | `extraction.native_pages` | Histogram | Native text pages |
+| | `extraction.scanned_pages` | Histogram | OCR-processed pages |
+| **Retrieval** | `retrieval.time_ms` | Histogram | Search latency |
+| | `retrieval.chunks_searched` | Histogram | Results returned |
+| | `retrieval.top_score` | Histogram | Best match score |
+| **QA** | `qa.total_time_ms` | Histogram | End-to-end latency |
+| | `qa.retrieval_time_ms` | Histogram | Retrieval portion |
+| | `qa.llm_time_ms` | Histogram | LLM generation time |
+| | `qa.citation_count` | Histogram | Citations per answer |
+| | `qa.confidence` | Histogram | Confidence scores |
+| | `qa.success/failure` | Counter | Success/failure counts |
+| **LLM** | `llm.calls` | Counter | Total LLM invocations |
+| | `llm.failures` | Counter | LLM errors |
+| | `vision.calls` | Counter | Vision model calls |
+
+### Health Endpoints
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `/health/live` | Liveness probe | `{"status": "alive", "pid": 12345}` |
+| `/health/ready` | Readiness probe | `{"status": "ready", "ready": true}` |
+| `/health/deps` | Dependency health | Per-service status with latency |
+| `/health` | Full health check | Graded status (healthy/degraded/unhealthy) |
+| `/metrics` | Application metrics | Aggregated histograms and counters |
+
+### Graceful Degradation
+
+| Failure | Behavior |
+|---------|----------|
+| Qdrant unavailable | QA disabled, uploads continue |
+| Ollama unavailable | Returns refusal with explanation |
+| OCR fails | Continues with native text only |
+| Redis unavailable | Startup fails (required) |
+| Database unavailable | Startup fails (required) |
+
+### Evaluation Framework
+
+#### QA Evaluation
+
+```bash
+# Run QA evaluation against test cases
+python -m evaluation.qa_eval --test-file tests/qa_cases.json
+
+# Output: Pass rate, citation accuracy, latency percentiles
+```
+
+Test case format:
+```json
+{
+  "document_id": "uuid",
+  "question": "What is the revenue?",
+  "expected_answer_contains": ["$100M"],
+  "expected_pages": [5, 6],
+  "should_refuse": false
+}
+```
+
+#### Retrieval Evaluation
+
+```bash
+# Measure Recall@K and Precision@K
+python -m evaluation.retrieval_eval
+```
+
+Metrics:
+- Recall@K: % of relevant chunks retrieved
+- Precision@K: % of retrieved chunks that are relevant
+- Score distribution: min, max, P50, P90
+
+#### Load Testing
+
+```bash
+# Run load tests
+python -m evaluation.load_test --document-id <uuid>
+
+# Quick mode (fewer requests)
+python -m evaluation.load_test --quick
+```
+
+Sample results:
+```
+Scenario: health_check
+  P50: 5ms, P95: 12ms, P99: 25ms
+  Throughput: 450 req/s
+
+Scenario: qa
+  P50: 2500ms, P95: 4200ms, P99: 6100ms
+  Throughput: 2 req/s
+```
+
+### Configuration Limits
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `max_pages_per_document` | 500 | Prevent runaway extraction |
+| `max_chunks_per_document` | 1000 | Limit vector storage |
+| `max_qa_context_chunks` | 10 | Control LLM context size |
+| `max_vision_calls_per_document` | 50 | Cap vision API costs |
+| `max_documents_per_qa` | 10 | Limit multi-doc queries |
+
+### Error Tracking (Sentry)
+
+Optional Sentry integration for production error tracking:
+
+```bash
+# Enable by setting environment variable
+SENTRY_DSN=https://xxx@sentry.io/xxx
+```
+
+Features:
+- Automatic exception capture
+- PII scrubbing (no document content sent)
+- Performance tracing (10% sample rate)
+- Environment tagging
+
+### Structured Logging
+
+All logs are JSON-formatted with context:
+
+```json
+{
+  "timestamp": "2024-01-15T10:30:00",
+  "level": "INFO",
+  "logger": "api.routes.qa",
+  "message": "QA complete",
+  "request_id": "abc123",
+  "document_id": "uuid",
+  "phase": "qa",
+  "duration_ms": 2500,
+  "citations": 3,
+  "confidence": "high"
+}
+```
+
+### Performance Benchmarks
+
+Typical latencies (local Ollama, 8GB RAM):
+
+| Operation | P50 | P95 | Notes |
+|-----------|-----|-----|-------|
+| Upload (10MB PDF) | 200ms | 500ms | Validation + storage |
+| Extraction (20 pages) | 5s | 15s | Depends on OCR ratio |
+| Indexing (20 pages) | 8s | 20s | Embedding generation |
+| Search | 50ms | 150ms | Vector similarity |
+| QA (single doc) | 2.5s | 5s | LLM-bound |
+| QA (multi-doc) | 4s | 8s | Parallel retrieval |
+
+### Known Limitations
+
+1. **Metrics are in-memory**: Reset on restart. For production, export to Prometheus.
+2. **No distributed tracing**: Single-service architecture.
+3. **Load test requires running server**: Not isolated unit tests.
+4. **Evaluation requires test data**: Must create test cases manually.
+
+### Failure Modes & Mitigations
+
+| Failure Mode | Detection | Mitigation |
+|--------------|-----------|------------|
+| LLM timeout | `qa.failure` counter | Retry with backoff, return 503 |
+| High latency | P95 > threshold | Scale horizontally, add caching |
+| Memory exhaustion | Container OOM | Limit concurrent requests |
+| Disk full | Upload failures | Monitor disk usage, cleanup old files |
+| Citation hallucination | Validation failure | Regenerate answer (max 2 retries) |
+
+### Security
+
+See [SECURITY.md](SECURITY.md) for:
+- Authentication checklist
+- Input validation measures
+- Prompt injection mitigations
+- Known risks and recommendations

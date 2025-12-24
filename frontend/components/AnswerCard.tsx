@@ -3,11 +3,11 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronDown, FileText, Table, Image, AlertCircle, Info } from 'lucide-react'
-import DOMPurify from 'dompurify'
 import { Source } from '../lib/api'
 import { CitationBadge } from './CitationBadge'
 import { ConfidenceMeter } from './ConfidenceMeter'
 import { cn } from '../lib/utils'
+import { sanitizeText } from '../lib/security'
 
 interface AnswerCardProps {
   content: string
@@ -24,8 +24,8 @@ export function AnswerCard({ content, sources, confidence, isError }: AnswerCard
                     content.toLowerCase().includes('not found') ||
                     content.toLowerCase().includes('no information')
 
-  // Sanitize and render content
-  const sanitizedContent = DOMPurify.sanitize(content, { ALLOWED_TAGS: [] })
+  // Sanitize and render content (XSS prevention)
+  const sanitizedContent = sanitizeText(content)
 
   const getSourceIcon = (type?: string) => {
     switch (type) {

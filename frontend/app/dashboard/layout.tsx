@@ -64,7 +64,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 )}
               </button>
 
-              <Link href="/dashboard" className="flex items-center gap-2 font-semibold text-lg">
+              <Link href="/" className="flex items-center gap-2 font-semibold text-lg">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <FileText className="h-4 w-4" />
                 </div>

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Table, ChevronDown, Copy, Check, FileText } from 'lucide-react'
 import { useTables } from '../lib/hooks'
 import { cn } from '../lib/utils'
+import { escapeHtml } from '../lib/security'
 
 interface TableViewerProps {
   documentId: string
@@ -165,13 +166,4 @@ function markdownToHtml(markdown: string): string {
     .join('')
 
   return `<table><thead><tr>${headerHtml}</tr></thead><tbody>${rowsHtml}</tbody></table>`
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;')
 }
