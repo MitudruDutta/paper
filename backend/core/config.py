@@ -1,5 +1,6 @@
 """Application configuration using pydantic-settings."""
 
+import re
 import urllib.parse
 from pathlib import Path
 from typing import Optional
@@ -48,6 +49,27 @@ class Settings(BaseSettings):
 
     # API
     api_port: int = 8000
+    
+    # CORS - comma-separated list of allowed origins
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    
+    @field_validator('cors_origins')
+    @classmethod
+    def validate_cors_origins(cls, v: str) -> str:
+        """Validate CORS origins are proper URLs with scheme."""
+        url_pattern = re.compile(r'^https?://[^\s/$.?#].[^\s]*$', re.IGNORECASE)
+        origins = [o.strip() for o in v.split(",") if o.strip()]
+        if not origins:
+            raise ValueError("cors_origins must contain at least one valid origin")
+        for origin in origins:
+            if not url_pattern.match(origin):
+                raise ValueError(f"Invalid CORS origin '{origin}': must be a valid URL with http/https scheme")
+        return v
+    
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS origins from comma-separated string."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     # Document Storage
     document_storage_path: str = "/data/documents"

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from core.config import settings
 from core.database import init_db, close_db
 from core.redis import init_redis, close_redis
 from core.storage import ensure_storage_dir_exists
@@ -142,12 +143,13 @@ app = FastAPI(
 app.state.startup_issues = []
 app.state.services_ready = False
 
+# CORS configuration - use settings-driven origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Rate limiting (after CORS)

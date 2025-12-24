@@ -2,30 +2,40 @@
 
 import asyncio
 import logging
+import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
+import numpy as np
 from qdrant_client import QdrantClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.document import Document
 from models.document_chunk import DocumentChunk
+from models.document_figure import DocumentFigure
 from services.prompt_builder import ChunkContext
 from services.retriever import search_similar
 from services.citation_validator import validate_and_fix_citations, extract_citations
 from services.confidence_scorer import compute_confidence, ConfidenceInputs
+from services.embedder import generate_embedding
 
 logger = logging.getLogger(__name__)
 
-RETRIEVAL_TOP_K_PER_DOC = 5
+# Retrieve more chunks to improve answer coverage for complex documents
+RETRIEVAL_TOP_K_PER_DOC = 10
+
+# Default relevance score for figure chunks when image-related questions are detected
+FIGURE_DEFAULT_SCORE = 0.7
 
 
 @dataclass
 class DocumentChunkContext(ChunkContext):
     """Chunk context with document attribution."""
     document_name: str = ""
+    is_figure: bool = False
+    figure_id: uuid.UUID | None = None
 
 
 @dataclass
@@ -56,7 +66,6 @@ async def retrieve_from_documents(
     http_client: httpx.AsyncClient,
 ) -> MultiDocRetrievalResult:
     """Retrieve relevant chunks from multiple documents in parallel."""
-    
     # Get document names
     doc_result = await db.execute(
         select(Document).where(Document.id.in_(document_ids))
@@ -64,6 +73,24 @@ async def retrieve_from_documents(
     documents = {d.id: d for d in doc_result.scalars().all()}
     doc_names = {d_id: documents[d_id].filename if d_id in documents else "Unknown" 
                  for d_id in document_ids}
+    
+    # Check if question is about images/figures/pictures using word boundaries
+    def is_likely_image_question(q: str) -> bool:
+        q_lower = q.lower()
+        # Check exclusions first to short-circuit false positives
+        exclusions = r'\b(figure out|figure it|figures out)\b'
+        if re.search(exclusions, q_lower):
+            return False
+        # Exact phrase patterns with word boundaries
+        phrases = [r'\bshow image', r'\bshow figure', r'\bshow picture', r'\bshow visual',
+                   r'\bwhat does it depict\b', r'\bvisualize this\b', r'\bdoes this image\b']
+        if any(re.search(p, q_lower) for p in phrases):
+            return True
+        # Word boundary check for keywords
+        keywords = r'\b(image|images|picture|pictures|figure|figures|photo|photos|diagram|chart|visual|visuals)\b'
+        return bool(re.search(keywords, q_lower))
+    
+    is_image_question = is_likely_image_question(question)
     
     # Parallel retrieval per document with error handling that preserves doc_id
     async def retrieve_single(doc_id: uuid.UUID):
@@ -101,6 +128,35 @@ async def retrieve_from_documents(
     else:
         chunk_map = {}
     
+    # If image question, also fetch figure descriptions
+    figure_chunks: dict[uuid.UUID, list[DocumentChunkContext]] = {}
+    if is_image_question:
+        figures_result = await db.execute(
+            select(DocumentFigure).where(DocumentFigure.document_id.in_(document_ids))
+        )
+        figures = figures_result.scalars().all()
+        
+        for fig in figures:
+            doc_id = fig.document_id
+            if doc_id not in figure_chunks:
+                figure_chunks[doc_id] = []
+            
+            # Create a synthetic chunk for the figure with distinct ID
+            synthetic_chunk_id = uuid.uuid4()
+            figure_chunks[doc_id].append(DocumentChunkContext(
+                chunk_id=synthetic_chunk_id,
+                document_id=doc_id,
+                content=f"[Figure on Page {fig.page_number}] Type: {fig.figure_type}. {fig.description}",
+                page_start=fig.page_number,
+                page_end=fig.page_number,
+                document_name=doc_names.get(doc_id, "Unknown"),
+                is_figure=True,
+                figure_id=fig.id,
+            ))
+        
+        if not figures:
+            logger.info("No extracted figures found - user should run Extract Tables/Figures first")
+    
     # Build structured result
     chunks_by_doc: dict[uuid.UUID, list[DocumentChunkContext]] = {}
     scores_by_doc: dict[uuid.UUID, list[float]] = {}
@@ -121,6 +177,57 @@ async def retrieve_from_documents(
                     document_name=doc_names.get(doc_id, "Unknown"),
                 ))
                 scores_by_doc[doc_id].append(score)
+    
+    # Add figure chunks if available (for image-related questions)
+    # Compute semantic similarity scores for figures in parallel
+    if figure_chunks:
+        # Get question embedding for similarity comparison
+        try:
+            question_embedding = await generate_embedding(http_client, question)
+        except Exception as e:
+            logger.warning(f"Failed to generate question embedding for figure scoring: {e}")
+            question_embedding = None
+        
+        for doc_id, fig_chunks in figure_chunks.items():
+            if doc_id not in chunks_by_doc:
+                chunks_by_doc[doc_id] = []
+                scores_by_doc[doc_id] = []
+            chunks_by_doc[doc_id].extend(fig_chunks)
+            
+            if question_embedding is None:
+                scores_by_doc[doc_id].extend([FIGURE_DEFAULT_SCORE] * len(fig_chunks))
+                continue
+            
+            # Generate all figure embeddings in parallel
+            embedding_tasks = [generate_embedding(http_client, fc.content) for fc in fig_chunks]
+            embedding_results = await asyncio.gather(*embedding_tasks, return_exceptions=True)
+            
+            # Compute similarity scores
+            q_vec = np.array(question_embedding)
+            norm_q = np.linalg.norm(q_vec)
+            
+            # If question embedding has zero norm, use default scores for all
+            if norm_q == 0:
+                scores_by_doc[doc_id].extend([FIGURE_DEFAULT_SCORE] * len(embedding_results))
+                continue
+            
+            fig_scores = []
+            for result in embedding_results:
+                if isinstance(result, Exception):
+                    logger.warning(f"Failed to generate figure embedding: {result}")
+                    fig_scores.append(FIGURE_DEFAULT_SCORE)
+                elif result is None:
+                    fig_scores.append(FIGURE_DEFAULT_SCORE)
+                else:
+                    f_vec = np.array(result)
+                    norm_f = np.linalg.norm(f_vec)
+                    if norm_f > 0:
+                        similarity = float(np.dot(q_vec, f_vec) / (norm_q * norm_f))
+                        fig_scores.append(max(0.0, min(1.0, similarity)))
+                    else:
+                        fig_scores.append(FIGURE_DEFAULT_SCORE)
+            
+            scores_by_doc[doc_id].extend(fig_scores)
     
     logger.info(f"Retrieved chunks from {len(document_ids)} documents: " + 
                 ", ".join(f"{doc_names.get(d, d)}: {len(chunks_by_doc.get(d, []))}" for d in document_ids))

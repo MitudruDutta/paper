@@ -8,6 +8,7 @@ from typing import Annotated
 
 import fitz  # PyMuPDF
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -229,3 +230,46 @@ async def get_document(
         )
     
     return DocumentDetail.model_validate(document)
+
+
+@router.get(
+    "/{document_id}/pdf",
+    responses={404: {"model": DocumentError}, 403: {"model": DocumentError}},
+    dependencies=[Depends(require_services_ready)],
+)
+async def get_document_pdf(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """Serve the PDF file for viewing."""
+    result = await db.execute(
+        select(Document).where(Document.id == document_id)
+    )
+    document = result.scalar_one_or_none()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if not document.file_path:
+        raise HTTPException(status_code=404, detail="PDF file not available")
+    
+    file_path = Path(document.file_path)
+    
+    # Validate path is within expected storage root to prevent traversal
+    storage_root = Path(settings.document_storage_path).resolve()
+    try:
+        resolved_path = file_path.resolve()
+        # Use is_relative_to for robust path containment check
+        if not resolved_path.is_relative_to(storage_root):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except (ValueError, RuntimeError):
+        raise HTTPException(status_code=403, detail="Invalid file path")
+    
+    if not resolved_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found on disk")
+    
+    return FileResponse(
+        path=resolved_path,
+        media_type="application/pdf",
+        filename=document.filename,
+    )

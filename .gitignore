@@ -15,7 +15,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -57,3 +56,12 @@ htmlcov/
 
 # Kiro CLI conversations
 .kiro/
+
+# Node.js
+node_modules/
+npm-debug.log*
+.npm
+
+# Next.js
+.next/
+.turbo/

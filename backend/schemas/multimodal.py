@@ -35,7 +35,7 @@ class ExtractVisualsResponse(BaseModel):
     tables_extracted: int
     figures_extracted: int
     pages_processed: int
-    status: Literal["completed", "partial", "failed"]
+    status: Literal["completed", "partial", "failed", "processing"]
     errors: list[str] = []
 
 
