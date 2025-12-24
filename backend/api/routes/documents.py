@@ -101,7 +101,7 @@ async def upload_document(
     
     logger.info(
         f"Upload started: {file.filename}",
-        extra={"event": "upload_start", "filename": file.filename},
+        extra={"event": "upload_start", "file_name": file.filename},
     )
     set_document_id(str(document_id))
     

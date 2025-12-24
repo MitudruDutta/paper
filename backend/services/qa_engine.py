@@ -199,14 +199,25 @@ async def answer_question(
         if validation.valid:
             logger.info(f"Answer validated. Cited pages: {validation.cited_pages}")
             
-            # Filter sources to only those actually cited
+            # Filter sources to only chunks that contain cited pages.
+            # NOTE: We narrow page_start/page_end to cited pages only, but keep the full
+            # chunk.content unchanged. This is intentional - the content may span more pages
+            # than the narrowed range, but we preserve it for context. The page range in the
+            # response indicates which pages were actually cited, not the full content span.
+            cited_sources = []
             if validation.cited_pages:
-                cited_sources = [
-                    c for c in chunks
-                    if any(p in validation.cited_pages for p in range(c.page_start, c.page_end + 1))
-                ]
-            else:
-                cited_sources = []
+                cited_pages_set = set(validation.cited_pages)
+                for chunk in chunks:
+                    chunk_pages = set(range(chunk.page_start, chunk.page_end + 1))
+                    if chunk_pages & cited_pages_set:
+                        cited_in_chunk = sorted(chunk_pages & cited_pages_set)
+                        cited_sources.append(ChunkContext(
+                            chunk_id=chunk.chunk_id,
+                            document_id=chunk.document_id,
+                            content=chunk.content,  # Full content preserved intentionally
+                            page_start=cited_in_chunk[0],
+                            page_end=cited_in_chunk[-1],
+                        ))
             
             return QAResult(
                 answer=validation.answer,

@@ -119,10 +119,24 @@ export function ChatPanel({ documentIds }: ChatPanelProps) {
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <MessageSquare className="h-6 w-6 text-primary" />
             </div>
-            <h3 className="font-medium">Start a conversation</h3>
+            <h3 className="font-medium">Ask a question</h3>
             <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-              Ask questions about your document and get answers with citations.
+              Ask anything about this document. Paper will find relevant sections and cite its sources.
             </p>
+            <div className="mt-4 space-y-2">
+              <p className="text-xs text-muted-foreground">Try asking:</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {['What is this about?', 'Key findings?', 'Any statistics?'].map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => setInput(q)}
+                    className="text-xs px-3 py-1.5 rounded-full bg-muted hover:bg-muted/80 transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         ) : (
           <AnimatePresence mode="popLayout">

@@ -8,7 +8,6 @@ import { SignedIn } from '@clerk/nextjs'
 import { UserMenu } from '@/components/auth/UserMenu'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Menu,
   Moon,
   Sun,
   FileText,
@@ -131,8 +130,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                         ))}
                       </div>
                     ) : filteredDocs?.length === 0 ? (
-                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                        {search ? 'No documents match your search' : 'No documents yet'}
+                      <div className="px-4 py-8 text-center">
+                        <p className="text-sm text-muted-foreground mb-1">
+                          {search ? 'No documents match your search' : 'No documents yet'}
+                        </p>
+                        {!search && (
+                          <p className="text-xs text-muted-foreground">
+                            Upload a PDF to get started
+                          </p>
+                        )}
                       </div>
                     ) : (
                       <nav className="space-y-1">

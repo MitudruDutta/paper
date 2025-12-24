@@ -2,13 +2,15 @@
 
 import { motion } from 'framer-motion'
 import { cn } from '../lib/utils'
+import { ConfidenceTooltip } from './ConfidenceTooltip'
 
 interface ConfidenceMeterProps {
   confidence: number
   className?: string
+  showTooltip?: boolean
 }
 
-export function ConfidenceMeter({ confidence, className }: ConfidenceMeterProps) {
+export function ConfidenceMeter({ confidence, className, showTooltip = true }: ConfidenceMeterProps) {
   const percentage = Math.round(confidence * 100)
   
   const getLevel = () => {
@@ -29,8 +31,9 @@ export function ConfidenceMeter({ confidence, className }: ConfidenceMeterProps)
           className={cn('h-full rounded-full', color)}
         />
       </div>
-      <span className="text-xs text-muted-foreground whitespace-nowrap">
+      <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1.5">
         {label} ({percentage}%)
+        {showTooltip && <ConfidenceTooltip confidence={confidence} />}
       </span>
     </div>
   )
