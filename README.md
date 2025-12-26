@@ -148,7 +148,7 @@ cp .env.example .env
 
 ```bash
 # Start backend services
-docker-compose -f infrastructure/docker-compose.yml up --build -d
+docker compose -f infrastructure/docker-compose.yml up --build -d
 
 # Start Ollama (if not already running)
 OLLAMA_HOST=0.0.0.0 ollama serve &
