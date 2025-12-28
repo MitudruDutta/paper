@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # Gemini LLM
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash-preview-05-20"
 
     # API
     api_port: int = 8000

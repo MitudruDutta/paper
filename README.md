@@ -84,7 +84,7 @@ Paper solves this by:
 ## LLM Provider
 
 Paper uses **Google Gemini** for all AI capabilities:
-- **Answer Generation**: `gemini-2.0-flash` for fast, accurate responses
+- **Answer Generation**: `gemini-2.5-flash` for fast, accurate responses
 - **Embeddings**: `text-embedding-004` for semantic search
 
 No local models or Ollama required.
