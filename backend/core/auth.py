@@ -5,11 +5,20 @@ import logging
 import os
 from typing import Callable
 
-from fastapi import Request, HTTPException
+import httpx
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from jose import jwt, JWTError
 
 logger = logging.getLogger(__name__)
+
+# Clerk configuration
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")  # e.g., https://your-app.clerk.accounts.dev/.well-known/jwks.json
+CLERK_ISSUER = os.getenv("CLERK_ISSUER")  # e.g., https://your-app.clerk.accounts.dev
+
+# Cache for JWKS
+_jwks_cache: dict | None = None
 
 # Endpoints that require authentication
 PROTECTED_ENDPOINTS = [
@@ -39,6 +48,26 @@ PUBLIC_PREFIXES = [
 ]
 
 
+async def get_jwks() -> dict | None:
+    """Fetch and cache Clerk JWKS."""
+    global _jwks_cache
+    if _jwks_cache:
+        return _jwks_cache
+    
+    if not CLERK_JWKS_URL:
+        return None
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(CLERK_JWKS_URL)
+            response.raise_for_status()
+            _jwks_cache = response.json()
+            return _jwks_cache
+    except Exception as e:
+        logger.error(f"Failed to fetch JWKS: {e}")
+        return None
+
+
 def is_protected_path(path: str) -> bool:
     """Check if path requires authentication."""
     # Exact public endpoints
@@ -62,10 +91,9 @@ def is_protected_path(path: str) -> bool:
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """
-    Simple auth middleware that validates Authorization header.
+    Auth middleware that validates Clerk JWT tokens.
     
-    For production, integrate with Clerk/Firebase JWT validation.
-    Currently checks for presence of Bearer token.
+    Falls back to simple token presence check if Clerk is not configured.
     """
     
     def __init__(self, app, enabled: bool = True):
@@ -111,13 +139,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         token = auth_header[7:]  # Remove "Bearer " prefix
         
-        # TODO: Validate JWT token with Clerk/Firebase
-        # For now, just check token is non-empty
-        # In production, replace with actual JWT validation:
-        #   - Verify signature
-        #   - Check expiration
-        #   - Validate issuer/audience
+        # Validate JWT with Clerk if configured
+        if CLERK_JWKS_URL and CLERK_ISSUER:
+            jwks = await get_jwks()
+            if jwks:
+                try:
+                    # Decode and validate JWT
+                    payload = jwt.decode(
+                        token,
+                        jwks,
+                        algorithms=["RS256"],
+                        issuer=CLERK_ISSUER,
+                        options={"verify_aud": False},  # Clerk doesn't always set aud
+                    )
+                    # Attach user info to request state
+                    request.state.user_id = payload.get("sub")
+                    return await call_next(request)
+                except JWTError as e:
+                    logger.warning(f"JWT validation failed for {path}: {e}")
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid token"},
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
         
+        # Fallback: simple token presence check (dev mode)
         if not token or len(token) < 10:
             logger.warning(f"Invalid token for {path}")
             return JSONResponse(
@@ -126,6 +172,5 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Token present - allow request
-        # In production, decode and attach user info to request.state
+        logger.debug(f"Token accepted (no JWKS validation) for {path}")
         return await call_next(request)

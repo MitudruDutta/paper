@@ -20,6 +20,7 @@ from core.logging import set_document_id
 from core.metrics import metrics, MetricNames
 from core.storage import (
     delete_temp_file,
+    get_file_for_processing,
     save_temp_file,
     save_uploaded_file,
 )
@@ -277,26 +278,17 @@ async def get_document_pdf(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    if not document.file_path:
+    if not document.stored_filename:
         raise HTTPException(status_code=404, detail="PDF file not available")
     
-    file_path = Path(document.file_path)
-    
-    # Validate path is within expected storage root to prevent traversal
-    storage_root = Path(settings.document_storage_path).resolve()
     try:
-        resolved_path = file_path.resolve()
-        # Use is_relative_to for robust path containment check
-        if not resolved_path.is_relative_to(storage_root):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except (ValueError, RuntimeError):
-        raise HTTPException(status_code=403, detail="Invalid file path")
-    
-    if not resolved_path.exists():
-        raise HTTPException(status_code=404, detail="PDF file not found on disk")
+        # Get file (downloads from Supabase if needed)
+        file_path = await get_file_for_processing(document.stored_filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF file not found")
     
     return FileResponse(
-        path=resolved_path,
+        path=file_path,
         media_type="application/pdf",
         filename=document.filename,
     )

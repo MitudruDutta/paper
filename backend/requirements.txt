@@ -22,6 +22,12 @@ Pillow==11.0.0
 httpx==0.28.1
 tenacity>=8.0.0,<9.0.0
 
+# LLM Providers
+google-generativeai>=0.8.0,<1.0.0
+
+# Auth
+python-jose[cryptography]>=3.3.0,<4.0.0
+
 # Phase 6: Multimodal
 camelot-py[cv]==0.11.0
 pdfplumber==0.11.4

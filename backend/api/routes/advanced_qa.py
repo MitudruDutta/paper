@@ -4,7 +4,6 @@ import logging
 import time
 import uuid
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from qdrant_client import QdrantClient
 from sqlalchemy import select, func
@@ -105,41 +104,37 @@ async def ask_advanced(
         document_ids=request.document_ids,
     )
     
-    # Single http client for both retrieval and generation
     conversation_persisted = True
     retrieval_start = time.perf_counter()
     
-    async with httpx.AsyncClient(timeout=120.0) as http_client:
-        # Retrieve from all documents
-        retrieval = await retrieve_from_documents(
-            qdrant,
-            effective_question,
-            request.document_ids,
-            db,
-            http_client,
-        )
-        retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
-        
-        # Generate answer with concurrency limit
-        llm_start = time.perf_counter()
-        try:
-            async def _generate():
-                return await generate_multi_doc_answer(
-                    effective_question,
-                    retrieval,
-                    http_client,
-                )
-            
-            qa_result = await with_llm_limit_or_reject(_generate(), timeout=45.0)
-            metrics.inc_counter(MetricNames.LLM_CALLS)
-        except QueueFullError:
-            metrics.inc_counter(MetricNames.QA_FAILURE)
-            raise HTTPException(
-                status_code=503,
-                detail="Server busy. Please try again in a few seconds.",
-                headers={"Retry-After": "15"},
+    # Retrieve from all documents
+    retrieval = await retrieve_from_documents(
+        qdrant,
+        effective_question,
+        request.document_ids,
+        db,
+    )
+    retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
+    
+    # Generate answer with concurrency limit
+    llm_start = time.perf_counter()
+    try:
+        async def _generate():
+            return await generate_multi_doc_answer(
+                effective_question,
+                retrieval,
             )
-        llm_time_ms = (time.perf_counter() - llm_start) * 1000
+            
+        qa_result = await with_llm_limit_or_reject(_generate(), timeout=45.0)
+        metrics.inc_counter(MetricNames.LLM_CALLS)
+    except QueueFullError:
+        metrics.inc_counter(MetricNames.QA_FAILURE)
+        raise HTTPException(
+            status_code=503,
+            detail="Server busy. Please try again in a few seconds.",
+            headers={"Retry-After": "15"},
+        )
+    llm_time_ms = (time.perf_counter() - llm_start) * 1000
     
     if not qa_result.success:
         logger.error(f"Multi-doc QA failed: {qa_result.error}", extra={"error_type": "llm_failure"})

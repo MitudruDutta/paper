@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { SignedIn } from '@clerk/nextjs'
 import { UserMenu } from '@/components/auth/UserMenu'
+import { ApiAuthProvider } from '@/components/providers/ApiAuthProvider'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Moon,
@@ -46,6 +47,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <SignedIn>
+      <ApiAuthProvider>
       <div className="min-h-screen bg-background">
         {/* Top Navigation */}
         <header className="fixed top-0 left-0 right-0 z-40 h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -197,6 +199,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </main>
         </div>
       </div>
+      </ApiAuthProvider>
     </SignedIn>
   )
 }

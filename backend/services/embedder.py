@@ -1,33 +1,33 @@
-"""Embedding service using Ollama."""
+"""Embedding service using Gemini."""
 
 import asyncio
 import logging
-import os
 import uuid
 from dataclasses import dataclass
 
-import httpx
+import google.generativeai as genai
+
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Ollama configuration from environment
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "172.17.0.1")
-OLLAMA_URL = f"http://{OLLAMA_HOST}:11434"
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_DIMENSION = 768
+EMBEDDING_CONCURRENCY = 5
 
-def _parse_int_env(key: str, default: int) -> int:
-    """Parse integer from environment with fallback."""
-    val = os.getenv(key)
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(f"Invalid {key}={val}, using default {default}")
-        return default
+# One-time configuration
+_configured = False
 
-EMBEDDING_DIMENSION = _parse_int_env("EMBEDDING_DIMENSION", 768)
-EMBEDDING_BATCH_SIZE = _parse_int_env("EMBEDDING_BATCH_SIZE", 10)
+
+def _ensure_configured():
+    """Configure Gemini API once."""
+    global _configured
+    if _configured:
+        return
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY not configured")
+    genai.configure(api_key=settings.gemini_api_key)
+    _configured = True
 
 
 @dataclass
@@ -39,50 +39,33 @@ class EmbeddingResult:
     error: str | None = None
 
 
-async def generate_embedding(client: httpx.AsyncClient, text: str) -> list[float] | None:
-    """Generate embedding for a single text using Ollama."""
+def _embed_sync(text: str, task_type: str) -> list[float] | None:
+    """Synchronous embedding call."""
+    _ensure_configured()
+    result = genai.embed_content(
+        model=EMBEDDING_MODEL,
+        content=text,
+        task_type=task_type,
+    )
+    return result['embedding']
+
+
+async def generate_embedding(text: str) -> list[float] | None:
+    """Generate embedding for document text using Gemini."""
     try:
-        response = await client.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": EMBEDDING_MODEL, "prompt": text},
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["embedding"]
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            f"Embedding HTTP error: {e.__class__.__name__} "
-            f"status={e.response.status_code} body={e.response.text[:200]}"
-        )
-        return None
-    except httpx.RequestError as e:
-        logger.error(f"Embedding request error: {e.__class__.__name__} {e}")
-        raise  # Re-raise transient network errors
-    except (KeyError, ValueError) as e:
-        logger.error(f"Embedding parse error: {e.__class__.__name__} {e}")
+        return await asyncio.to_thread(_embed_sync, text, "retrieval_document")
+    except Exception as e:
+        logger.error(f"Embedding error: {e}")
         return None
 
 
-async def generate_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
-    """Generate embeddings for multiple texts."""
-    results: list[list[float] | None] = []
-    
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
-            batch = texts[i:i + EMBEDDING_BATCH_SIZE]
-            
-            # Process batch concurrently
-            tasks = [generate_embedding(client, text) for text in batch]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for j, result in enumerate(batch_results):
-                if isinstance(result, Exception):
-                    logger.error(f"Embedding failed for text index {i + j}: {result.__class__.__name__}: {result}")
-                    results.append(None)
-                else:
-                    results.append(result)
-    
-    return results
+async def generate_query_embedding(text: str) -> list[float] | None:
+    """Generate embedding for a query using Gemini."""
+    try:
+        return await asyncio.to_thread(_embed_sync, text, "retrieval_query")
+    except Exception as e:
+        logger.error(f"Query embedding error: {e}")
+        return None
 
 
 def _is_zero_vector(embedding: list[float], tolerance: float = 1e-9) -> bool:
@@ -93,60 +76,38 @@ def _is_zero_vector(embedding: list[float], tolerance: float = 1e-9) -> bool:
 async def embed_chunks(
     chunks: list[tuple[uuid.UUID, str]],
 ) -> list[EmbeddingResult]:
-    """
-    Generate embeddings for chunks.
-    
-    Args:
-        chunks: List of (chunk_id, content) tuples
-    
-    Returns:
-        List of EmbeddingResult objects
-    """
+    """Generate embeddings for chunks using Gemini with concurrency."""
     if not chunks:
         return []
     
-    chunk_ids = [c[0] for c in chunks]
-    texts = [c[1] for c in chunks]
-    
     logger.info(f"Generating embeddings for {len(chunks)} chunks")
     
-    embeddings = await generate_embeddings_batch(texts)
+    semaphore = asyncio.Semaphore(EMBEDDING_CONCURRENCY)
     
-    results = []
-    for chunk_id, embedding in zip(chunk_ids, embeddings):
-        # Case 1: Embedding is None or not a list
-        if embedding is None or not isinstance(embedding, list):
-            results.append(EmbeddingResult(
-                chunk_id=chunk_id,
-                embedding=[],
-                success=False,
+    async def embed_one(chunk_id: uuid.UUID, content: str) -> EmbeddingResult:
+        async with semaphore:
+            embedding = await generate_embedding(content)
+        
+        if embedding is None:
+            return EmbeddingResult(
+                chunk_id=chunk_id, embedding=[], success=False,
                 error="Embedding generation failed",
-            ))
-        # Case 2: Wrong dimension
-        elif len(embedding) != EMBEDDING_DIMENSION:
-            results.append(EmbeddingResult(
-                chunk_id=chunk_id,
-                embedding=[],
-                success=False,
-                error=f"Invalid embedding dimension: {len(embedding)} != {EMBEDDING_DIMENSION}",
-            ))
-        # Case 3: Zero vector
-        elif _is_zero_vector(embedding):
-            results.append(EmbeddingResult(
-                chunk_id=chunk_id,
-                embedding=[],
-                success=False,
+            )
+        if len(embedding) != EMBEDDING_DIMENSION:
+            return EmbeddingResult(
+                chunk_id=chunk_id, embedding=[], success=False,
+                error=f"Invalid dimension: {len(embedding)}",
+            )
+        if _is_zero_vector(embedding):
+            return EmbeddingResult(
+                chunk_id=chunk_id, embedding=[], success=False,
                 error="Zero-vector embedding",
-            ))
-        # Success
-        else:
-            results.append(EmbeddingResult(
-                chunk_id=chunk_id,
-                embedding=embedding,
-                success=True,
-            ))
+            )
+        return EmbeddingResult(chunk_id=chunk_id, embedding=embedding, success=True)
+    
+    results = await asyncio.gather(*[embed_one(cid, content) for cid, content in chunks])
     
     success_count = sum(1 for r in results if r.success)
-    logger.info(f"Generated {success_count}/{len(chunks)} embeddings successfully")
+    logger.info(f"Generated {success_count}/{len(chunks)} embeddings")
     
-    return results
+    return list(results)

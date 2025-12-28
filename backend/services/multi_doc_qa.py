@@ -6,8 +6,6 @@ import re
 import uuid
 from dataclasses import dataclass, field
 
-import httpx
-import numpy as np
 from qdrant_client import QdrantClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +21,7 @@ from services.embedder import generate_embedding
 
 logger = logging.getLogger(__name__)
 
-# Retrieve more chunks to improve answer coverage for complex documents
 RETRIEVAL_TOP_K_PER_DOC = 10
-
-# Default relevance score for figure chunks when image-related questions are detected
 FIGURE_DEFAULT_SCORE = 0.7
 
 
@@ -63,7 +58,6 @@ async def retrieve_from_documents(
     question: str,
     document_ids: list[uuid.UUID],
     db: AsyncSession,
-    http_client: httpx.AsyncClient,
 ) -> MultiDocRetrievalResult:
     """Retrieve relevant chunks from multiple documents in parallel."""
     # Get document names
@@ -100,7 +94,6 @@ async def retrieve_from_documents(
                 question,
                 document_ids=[doc_id],
                 top_k=RETRIEVAL_TOP_K_PER_DOC,
-                http_client=http_client,
             )
             return doc_id, results, None
         except Exception as e:
@@ -179,11 +172,10 @@ async def retrieve_from_documents(
                 scores_by_doc[doc_id].append(score)
     
     # Add figure chunks if available (for image-related questions)
-    # Compute semantic similarity scores for figures in parallel
     if figure_chunks:
-        # Get question embedding for similarity comparison
         try:
-            question_embedding = await generate_embedding(http_client, question)
+            from services.embedder import generate_query_embedding
+            question_embedding = await generate_query_embedding(question)
         except Exception as e:
             logger.warning(f"Failed to generate question embedding for figure scoring: {e}")
             question_embedding = None
@@ -198,34 +190,31 @@ async def retrieve_from_documents(
                 scores_by_doc[doc_id].extend([FIGURE_DEFAULT_SCORE] * len(fig_chunks))
                 continue
             
-            # Generate all figure embeddings in parallel
-            embedding_tasks = [generate_embedding(http_client, fc.content) for fc in fig_chunks]
-            embedding_results = await asyncio.gather(*embedding_tasks, return_exceptions=True)
+            # Generate figure embeddings concurrently
+            async def get_fig_embedding(content: str):
+                try:
+                    return await generate_embedding(content)
+                except Exception:
+                    return None
+            
+            embedding_results = await asyncio.gather(
+                *[get_fig_embedding(fc.content) for fc in fig_chunks]
+            )
             
             # Compute similarity scores
-            q_vec = np.array(question_embedding)
-            norm_q = np.linalg.norm(q_vec)
-            
-            # If question embedding has zero norm, use default scores for all
-            if norm_q == 0:
-                scores_by_doc[doc_id].extend([FIGURE_DEFAULT_SCORE] * len(embedding_results))
-                continue
-            
+            norm_q = sum(a * a for a in question_embedding) ** 0.5
             fig_scores = []
-            for result in embedding_results:
-                if isinstance(result, Exception):
-                    logger.warning(f"Failed to generate figure embedding: {result}")
-                    fig_scores.append(FIGURE_DEFAULT_SCORE)
-                elif result is None:
-                    fig_scores.append(FIGURE_DEFAULT_SCORE)
-                else:
-                    f_vec = np.array(result)
-                    norm_f = np.linalg.norm(f_vec)
+            for fig_embedding in embedding_results:
+                if fig_embedding and norm_q > 0:
+                    dot = sum(a * b for a, b in zip(question_embedding, fig_embedding))
+                    norm_f = sum(a * a for a in fig_embedding) ** 0.5
                     if norm_f > 0:
-                        similarity = float(np.dot(q_vec, f_vec) / (norm_q * norm_f))
+                        similarity = dot / (norm_q * norm_f)
                         fig_scores.append(max(0.0, min(1.0, similarity)))
                     else:
                         fig_scores.append(FIGURE_DEFAULT_SCORE)
+                else:
+                    fig_scores.append(FIGURE_DEFAULT_SCORE)
             
             scores_by_doc[doc_id].extend(fig_scores)
     
@@ -316,12 +305,9 @@ Comparison:
 async def generate_multi_doc_answer(
     question: str,
     retrieval: MultiDocRetrievalResult,
-    http_client: httpx.AsyncClient,
 ) -> MultiDocQAResult:
     """Generate answer for multi-document query."""
-    # TODO: Refactor to eliminate circular import - extract generate_answer to qa_common.py
-    # See: shared LLM generation logic used by both qa_engine and multi_doc_qa
-    from services.qa_engine import generate_answer
+    from services.llm_client import generate_answer as llm_generate
     
     # Check if we have any chunks
     total_chunks = sum(len(chunks) for chunks in retrieval.chunks_by_doc.values())
@@ -349,10 +335,10 @@ async def generate_multi_doc_answer(
     for attempt in range(max_retries + 1):
         logger.info(f"Multi-doc generation attempt {attempt + 1}/{max_retries + 1}")
         
-        gen_result = await generate_answer(messages, http_client)
+        answer_text, model_used, success, error = await llm_generate(messages)
         
-        if not gen_result.success:
-            logger.error(f"Generation failed on attempt {attempt + 1}/{max_retries + 1}: {gen_result.error}")
+        if not success:
+            logger.error(f"Generation failed on attempt {attempt + 1}/{max_retries + 1}: {error}")
             continue
         
         # Validate citations (reuse Phase 4 validator)
@@ -368,7 +354,7 @@ async def generate_multi_doc_answer(
             for c in all_chunks
         ]
         
-        validation = validate_and_fix_citations(gen_result.answer, chunk_contexts)
+        validation = validate_and_fix_citations(answer_text, chunk_contexts)
         
         if validation.valid:
             # Find which chunks were actually cited

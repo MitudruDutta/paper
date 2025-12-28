@@ -9,6 +9,12 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from core.config import settings
+from core.supabase_storage import (
+    is_supabase_storage_configured,
+    upload_to_supabase,
+    download_from_supabase,
+    delete_from_supabase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,19 +87,25 @@ async def save_uploaded_file(
     extension: str = "pdf",
 ) -> tuple[str, Path]:
     """
-    Move validated file from temp location to permanent storage.
-    
-    Args:
-        temp_path: Path to the temporary file
-        document_id: UUID of the document
-        extension: File extension without leading dot (default: "pdf")
+    Save file to storage (Supabase in production, local in dev).
     
     Returns:
-        Tuple of (stored_filename, file_path)
+        Tuple of (stored_filename, local_file_path)
     """
-    await ensure_storage_dir_exists()
-    
     stored_filename = generate_stored_filename(document_id, extension)
+    
+    if is_supabase_storage_configured():
+        # Upload to Supabase Storage
+        await upload_to_supabase(temp_path, stored_filename)
+        # Keep local copy for processing
+        await ensure_storage_dir_exists()
+        file_path = get_file_path(stored_filename)
+        await aiofiles.os.rename(str(temp_path), str(file_path))
+        logger.info(f"Stored {document_id} in Supabase + local cache")
+        return stored_filename, file_path
+    
+    # Local storage only
+    await ensure_storage_dir_exists()
     file_path = get_file_path(stored_filename)
     
     try:
@@ -101,45 +113,67 @@ async def save_uploaded_file(
         logger.info(f"Stored document {document_id} at {file_path}")
         return stored_filename, file_path
     except OSError:
-        # Cross-device move - copy then delete using context managers
-        try:
-            async with aiofiles.open(temp_path, "rb") as src:
-                async with aiofiles.open(file_path, "wb") as dst:
-                    while chunk := await src.read(8192):
-                        await dst.write(chunk)
-            # Only remove temp after successful copy
-            await aiofiles.os.remove(temp_path)
-            logger.info(f"Stored document {document_id} at {file_path} (copied)")
-            return stored_filename, file_path
-        except Exception as e:
-            logger.error(f"Failed to copy file to {file_path}: {e}")
-            # Remove partial destination file if it exists
-            if await aiofiles.os.path.exists(file_path):
-                try:
-                    await aiofiles.os.remove(file_path)
-                    logger.info(f"Cleaned up partial file: {file_path}")
-                except Exception as cleanup_err:
-                    logger.warning(f"Failed to clean up partial file {file_path}: {cleanup_err}")
-            raise
+        # Cross-device move - copy then delete
+        async with aiofiles.open(temp_path, "rb") as src:
+            async with aiofiles.open(file_path, "wb") as dst:
+                while chunk := await src.read(8192):
+                    await dst.write(chunk)
+        await aiofiles.os.remove(temp_path)
+        logger.info(f"Stored document {document_id} at {file_path} (copied)")
+        return stored_filename, file_path
+
+
+async def get_file_for_processing(stored_filename: str) -> Path:
+    """
+    Get file path for processing, downloading from Supabase if needed.
+    
+    Returns local path to the file.
+    """
+    file_path = get_file_path(stored_filename)
+    
+    # Check if local copy exists
+    if await aiofiles.os.path.exists(file_path):
+        return file_path
+    
+    # Download from Supabase if configured
+    if is_supabase_storage_configured():
+        await ensure_storage_dir_exists()
+        success = await download_from_supabase(stored_filename, file_path)
+        if success:
+            return file_path
+        raise FileNotFoundError(f"File not found in Supabase: {stored_filename}")
+    
+    raise FileNotFoundError(f"File not found: {stored_filename}")
 
 
 async def delete_file(stored_filename: str) -> bool:
     """
-    Delete a stored file.
+    Delete a stored file from all storage locations.
     
     Returns:
         True if deleted, False if file didn't exist
     """
+    deleted = False
+    
+    # Delete from Supabase if configured
+    if is_supabase_storage_configured():
+        try:
+            await delete_from_supabase(stored_filename)
+            deleted = True
+        except Exception as e:
+            logger.warning(f"Failed to delete from Supabase: {e}")
+    
+    # Delete local copy
     file_path = get_file_path(stored_filename)
     try:
         if await aiofiles.os.path.exists(file_path):
             await aiofiles.os.remove(file_path)
-            logger.info(f"Deleted file: {file_path}")
-            return True
-        return False
+            logger.info(f"Deleted local file: {file_path}")
+            deleted = True
     except Exception as e:
-        logger.error(f"Failed to delete file {file_path}: {e}")
-        raise
+        logger.error(f"Failed to delete local file {file_path}: {e}")
+    
+    return deleted
 
 
 async def save_temp_file(upload_file: UploadFile, max_size: int, suffix: str = ".tmp") -> Path:

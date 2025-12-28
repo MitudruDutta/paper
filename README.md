@@ -76,10 +76,18 @@ Paper solves this by:
                     ┌───────────────┼───────────────┐
                     ▼               ▼               ▼
              ┌──────────┐   ┌──────────┐   ┌──────────┐
-             │PostgreSQL│   │  Qdrant  │   │  Ollama  │
+             │PostgreSQL│   │  Qdrant  │   │  Gemini  │
              │(Supabase)│   │ (Vectors)│   │  (LLM)   │
              └──────────┘   └──────────┘   └──────────┘
 ```
+
+## LLM Provider
+
+Paper uses **Google Gemini** for all AI capabilities:
+- **Answer Generation**: `gemini-2.0-flash` for fast, accurate responses
+- **Embeddings**: `text-embedding-004` for semantic search
+
+No local models or Ollama required.
 
 ## How It Works
 
@@ -123,8 +131,8 @@ Every answer includes:
 | **Database** | PostgreSQL (Supabase) | Document metadata, audit trail |
 | **Vector DB** | Qdrant | Semantic search |
 | **Cache** | Redis | Session management |
-| **LLM** | Ollama (Llama 3.1 8B) | Answer generation |
-| **Embeddings** | nomic-embed-text | Vector embeddings |
+| **LLM** | Google Gemini | Answer generation |
+| **Embeddings** | Gemini text-embedding-004 | Vector embeddings |
 | **OCR** | Tesseract | Scanned document support |
 | **PDF** | PyMuPDF, Camelot, pdfplumber | Text and table extraction |
 
@@ -133,7 +141,7 @@ Every answer includes:
 ### Prerequisites
 - Docker and Docker Compose v2
 - Supabase account (for PostgreSQL)
-- Ollama running locally with `llama3.1:8b` and `nomic-embed-text`
+- Google Gemini API key (get from [Google AI Studio](https://aistudio.google.com/apikey))
 
 ### 1. Clone and Configure
 
@@ -141,7 +149,7 @@ Every answer includes:
 git clone https://github.com/MitudruDutta/paper.git
 cd paper
 cp .env.example .env
-# Edit .env with your Supabase credentials
+# Edit .env with your credentials
 ```
 
 ### 2. Start Services
@@ -149,11 +157,6 @@ cp .env.example .env
 ```bash
 # Start backend services
 docker compose -f infrastructure/docker-compose.yml up --build -d
-
-# Start Ollama (if not already running)
-OLLAMA_HOST=0.0.0.0 ollama serve &
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
 ```
 
 ### 3. Start Frontend

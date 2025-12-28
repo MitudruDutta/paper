@@ -33,10 +33,19 @@ def init_qdrant() -> None:
     """Initialize Qdrant client."""
     global qdrant_client
     try:
-        qdrant_client = QdrantClient(
-            host=settings.qdrant_host,
-            port=settings.qdrant_port,
-        )
+        # Support both local and Qdrant Cloud
+        if settings.qdrant_api_key:
+            # Qdrant Cloud (HTTPS)
+            qdrant_client = QdrantClient(
+                url=f"https://{settings.qdrant_host}:{settings.qdrant_port}",
+                api_key=settings.qdrant_api_key,
+            )
+        else:
+            # Local/self-hosted
+            qdrant_client = QdrantClient(
+                host=settings.qdrant_host,
+                port=settings.qdrant_port,
+            )
         qdrant_client.get_collections()
         logger.info("Qdrant connection established successfully")
     except Exception as e:

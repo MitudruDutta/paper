@@ -5,7 +5,6 @@ import logging
 import time
 import uuid
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from qdrant_client import QdrantClient
 from sqlalchemy import select, func
@@ -30,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["qa"])
 
-RETRIEVAL_TOP_K = 8  # Retrieve more, then filter by relevance
+RETRIEVAL_TOP_K = 8
 
 
 @retry(
@@ -98,16 +97,14 @@ async def ask_question(
             detail="Document not indexed. Run indexing first.",
         )
     
-    # Retrieve relevant chunks (this is fast, no limit needed)
+    # Retrieve relevant chunks
     retrieval_start = time.perf_counter()
-    async with httpx.AsyncClient(timeout=60.0) as http_client:
-        search_results = await search_similar(
-            qdrant,
-            request.question,
-            document_ids=[document_id],
-            top_k=RETRIEVAL_TOP_K,
-            http_client=http_client,
-        )
+    search_results = await search_similar(
+        qdrant,
+        request.question,
+        document_ids=[document_id],
+        top_k=RETRIEVAL_TOP_K,
+    )
     retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
     
     logger.info(f"Retrieved {len(search_results)} chunks", extra={"retrieval_ms": round(retrieval_time_ms, 2)})
@@ -144,8 +141,7 @@ async def ask_question(
     llm_start = time.perf_counter()
     try:
         async def _generate():
-            async with httpx.AsyncClient(timeout=120.0) as http_client:
-                return await answer_question(request.question, chunks, http_client)
+            return await answer_question(request.question, chunks)
         
         qa_result = await with_llm_limit_or_reject(_generate(), timeout=30.0)
         metrics.inc_counter(MetricNames.LLM_CALLS)

@@ -5,7 +5,6 @@ import logging
 import os
 from enum import Enum
 
-import httpx
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
@@ -17,9 +16,6 @@ from api.dependencies import check_qdrant_connection
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
-
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "172.17.0.1")
-OLLAMA_URL = f"http://{OLLAMA_HOST}:11434"
 
 
 class HealthStatus(str, Enum):
@@ -40,7 +36,7 @@ class DependencyHealth(BaseModel):
     database: ServiceHealth
     redis: ServiceHealth
     qdrant: ServiceHealth
-    ollama: ServiceHealth
+    llm: ServiceHealth
 
 
 class HealthResponse(BaseModel):
@@ -92,11 +88,10 @@ async def check_service_health(
         return ServiceHealth(status=HealthStatus.UNHEALTHY, latency_ms=round(latency_ms, 2), error=str(e)[:100])
 
 
-async def check_ollama_health() -> bool:
-    """Check if Ollama is reachable."""
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.get(f"{OLLAMA_URL}/api/tags")
-        return response.status_code == 200
+async def check_llm_health() -> bool:
+    """Check if Gemini is healthy."""
+    from services.llm_client import check_llm_health as llm_health_check
+    return await llm_health_check()
 
 
 @router.get("/health/live", response_model=LivenessResponse)
@@ -138,18 +133,18 @@ async def dependency_health(response: Response) -> DependencyHealth:
     
     Returns health status and latency for each dependency.
     """
-    db_health, redis_health, qdrant_health, ollama_health = await asyncio.gather(
+    db_health, redis_health, qdrant_health, llm_health = await asyncio.gather(
         check_service_health("database", check_database_connection, is_async=True),
         check_service_health("redis", check_redis_connection, is_async=True),
         check_service_health("qdrant", check_qdrant_connection, is_async=False),
-        check_service_health("ollama", check_ollama_health, is_async=True),
+        check_service_health("llm", check_llm_health, is_async=True),
     )
 
     deps = DependencyHealth(
         database=db_health,
         redis=redis_health,
         qdrant=qdrant_health,
-        ollama=ollama_health,
+        llm=llm_health,
     )
 
     # Set 503 if any core service is unhealthy
@@ -184,24 +179,24 @@ async def health_check(request: Request, response: Response) -> HealthResponse:
                 database=ServiceHealth(status=HealthStatus.UNHEALTHY, error="Not initialized"),
                 redis=ServiceHealth(status=HealthStatus.UNHEALTHY, error="Not initialized"),
                 qdrant=ServiceHealth(status=HealthStatus.UNHEALTHY, error="Not initialized"),
-                ollama=ServiceHealth(status=HealthStatus.UNHEALTHY, error="Not initialized"),
+                llm=ServiceHealth(status=HealthStatus.UNHEALTHY, error="Not initialized"),
             ),
             startup_issues=startup_issues or ["Services not initialized"],
         )
 
     # Check all services
-    db_health, redis_health, qdrant_health, ollama_health = await asyncio.gather(
+    db_health, redis_health, qdrant_health, llm_health = await asyncio.gather(
         check_service_health("database", check_database_connection, is_async=True),
         check_service_health("redis", check_redis_connection, is_async=True),
         check_service_health("qdrant", check_qdrant_connection, is_async=False),
-        check_service_health("ollama", check_ollama_health, is_async=True),
+        check_service_health("llm", check_llm_health, is_async=True),
     )
 
     services = DependencyHealth(
         database=db_health,
         redis=redis_health,
         qdrant=qdrant_health,
-        ollama=ollama_health,
+        llm=llm_health,
     )
 
     # Determine overall status
@@ -209,11 +204,11 @@ async def health_check(request: Request, response: Response) -> HealthResponse:
         s.status == HealthStatus.HEALTHY
         for s in [db_health, redis_health, qdrant_health]
     )
-    all_healthy = core_healthy and ollama_health.status == HealthStatus.HEALTHY
+    all_healthy = core_healthy and llm_health.status == HealthStatus.HEALTHY
 
     issues = list(startup_issues)
-    if ollama_health.status != HealthStatus.HEALTHY:
-        issues.append("Ollama unavailable - QA features may fail")
+    if llm_health.status != HealthStatus.HEALTHY:
+        issues.append("LLM unavailable - QA features may fail")
 
     if all_healthy:
         status = HealthStatus.HEALTHY

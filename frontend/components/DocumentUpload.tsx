@@ -68,7 +68,7 @@ export function DocumentUpload() {
       let onAbort: (() => void) | null = null
 
       try {
-        const { promise, abort } = api.uploadDocument(file, (progress) => {
+        const { promise, abort } = await api.uploadDocument(file, (progress) => {
           if (!mountedRef.current) return
           setUploads((prev) =>
             prev.map((u) =>

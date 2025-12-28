@@ -6,7 +6,6 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,49 +72,52 @@ async def _extract_visuals_task(
             errors = []
             pages_processed = 0
             
-            async with httpx.AsyncClient(timeout=120.0) as http_client:
-                for page_num in range(page_count):
-                    try:
-                        tables = await asyncio.to_thread(extract_tables_from_page, pdf_path, page_num)
-                        for table in tables:
-                            processed = process_extracted_table(table)
-                            doc_table = DocumentTable(
-                                document_id=document_id,
-                                page_number=processed["page_number"],
-                                title=processed["title"],
-                                row_count=processed["row_count"],
-                                column_count=processed["column_count"],
-                                table_data=processed["table_data"],
-                                markdown_repr=processed["markdown_repr"],
-                            )
-                            db.add(doc_table)
-                            tables_count += 1
+            for page_num in range(page_count):
+                # Track items added for this page for rollback
+                page_tables = []
+                page_figures = []
+                
+                try:
+                    tables = await asyncio.to_thread(extract_tables_from_page, pdf_path, page_num)
+                    for table in tables:
+                        processed = process_extracted_table(table)
+                        doc_table = DocumentTable(
+                            document_id=document_id,
+                            page_number=processed["page_number"],
+                            title=processed["title"],
+                            row_count=processed["row_count"],
+                            column_count=processed["column_count"],
+                            table_data=processed["table_data"],
+                            markdown_repr=processed["markdown_repr"],
+                        )
+                        db.add(doc_table)
+                        page_tables.append(doc_table)
+                    
+                    figures = await analyze_figures_on_page(pdf_path, page_num)
+                    for fig in figures:
+                        doc_figure = DocumentFigure(
+                            document_id=document_id,
+                            page_number=fig.page_number,
+                            figure_type=fig.figure_type,
+                            description=fig.description,
+                            extracted_data=fig.extracted_data,
+                        )
+                        db.add(doc_figure)
+                        page_figures.append(doc_figure)
+                        metrics.inc_counter(MetricNames.VISION_CALLS)
+                    
+                    # Commit after entire page succeeds
+                    await db.commit()
+                    tables_count += len(page_tables)
+                    figures_count += len(page_figures)
+                    pages_processed += 1
                         
-                        figures = await analyze_figures_on_page(pdf_path, page_num, http_client)
-                        for fig in figures:
-                            doc_figure = DocumentFigure(
-                                document_id=document_id,
-                                page_number=fig.page_number,
-                                figure_type=fig.figure_type,
-                                description=fig.description,
-                                extracted_data=fig.extracted_data,
-                            )
-                            db.add(doc_figure)
-                            figures_count += 1
-                            metrics.inc_counter(MetricNames.VISION_CALLS)
-                        
-                        pages_processed += 1
-                        
-                        if pages_processed % BATCH_COMMIT_SIZE == 0:
-                            await db.commit()
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing page {page_num}: {e}")
-                        errors.append({"page": page_num, "error": str(e)})
-                        metrics.inc_counter(MetricNames.VISION_FAILURES)
-                        await db.rollback()
-            
-            await db.commit()
+                except Exception as e:
+                    logger.error(f"Error processing page {page_num}: {e}")
+                    errors.append({"page": page_num, "error": str(e)})
+                    metrics.inc_counter(MetricNames.VISION_FAILURES)
+                    # Rollback only this page's uncommitted changes
+                    await db.rollback()
             
             # Record metrics
             duration_ms = (time.perf_counter() - start_time) * 1000

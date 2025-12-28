@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # Qdrant
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333
+    qdrant_api_key: Optional[str] = None  # Required for Qdrant Cloud
+
+    # Gemini LLM
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.0-flash"
 
     # API
     api_port: int = 8000
@@ -72,8 +77,13 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     # Document Storage
-    document_storage_path: str = "/data/documents"
+    document_storage_path: str = "/data/documents"  # Fallback for local dev
     max_upload_size_mb: int = 50
+    
+    # Supabase Storage (for production)
+    supabase_storage_url: Optional[str] = None  # e.g., https://xxx.supabase.co/storage/v1
+    supabase_service_role_key: Optional[str] = None
+    supabase_storage_bucket: str = "documents"
     
     # Processing Limits (cost/resource guardrails)
     max_pages_per_document: int = 500

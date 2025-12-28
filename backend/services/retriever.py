@@ -4,7 +4,6 @@ import asyncio
 import logging
 import uuid
 
-import httpx
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -16,7 +15,7 @@ from qdrant_client.models import (
     MatchAny,
 )
 
-from services.embedder import generate_embedding, EMBEDDING_DIMENSION
+from services.embedder import generate_query_embedding, EMBEDDING_DIMENSION
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +42,7 @@ def store_vectors(
     client: QdrantClient,
     points: list[tuple[uuid.UUID, list[float], dict]],
 ) -> int:
-    """
-    Store vectors in Qdrant.
-    
-    Args:
-        client: Qdrant client
-        points: List of (id, vector, payload) tuples
-    
-    Returns:
-        Number of points stored
-    """
+    """Store vectors in Qdrant."""
     ensure_collection_exists(client)
     
     qdrant_points = [
@@ -99,7 +89,7 @@ def _search_sync(
     search_filter: Filter | None,
     top_k: int,
 ) -> list[tuple[uuid.UUID, float, dict]]:
-    """Synchronous search (runs in thread). Also ensures collection exists."""
+    """Synchronous search in thread."""
     ensure_collection_exists(client)
     
     results = client.search(
@@ -119,33 +109,14 @@ async def search_similar(
     query: str,
     document_ids: list[uuid.UUID] | None = None,
     top_k: int = 5,
-    http_client: httpx.AsyncClient | None = None,
 ) -> list[tuple[uuid.UUID, float, dict]]:
-    """
-    Search for similar chunks.
-    
-    Args:
-        client: Qdrant client
-        query: Search query text
-        document_ids: Optional list of document IDs to filter
-        top_k: Number of results to return
-        http_client: Optional shared httpx client for embedding generation
-    
-    Returns:
-        List of (chunk_id, score, payload) tuples
-    """
-    # Generate query embedding
-    if http_client is not None:
-        query_embedding = await generate_embedding(http_client, query)
-    else:
-        async with httpx.AsyncClient(timeout=60.0) as local_client:
-            query_embedding = await generate_embedding(local_client, query)
+    """Search for similar chunks using Gemini embeddings."""
+    query_embedding = await generate_query_embedding(query)
     
     if query_embedding is None:
         logger.error("Failed to generate query embedding")
         return []
     
-    # Build filter if document_ids provided
     search_filter = None
     if document_ids:
         search_filter = Filter(
@@ -157,7 +128,6 @@ async def search_similar(
             ]
         )
     
-    # Run synchronous search in thread (includes ensure_collection_exists)
     return await asyncio.to_thread(
         _search_sync, client, query_embedding, search_filter, top_k
     )

@@ -1,5 +1,12 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
+// Token getter - set by auth provider
+let getAuthToken: (() => Promise<string | null>) | null = null
+
+export function setAuthTokenGetter(getter: () => Promise<string | null>) {
+  getAuthToken = getter
+}
+
 export interface Document {
   id: string
   filename: string
@@ -64,6 +71,14 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
     headers['Content-Type'] = 'application/json'
   }
 
+  // Add auth token if available
+  if (getAuthToken) {
+    const token = await getAuthToken()
+    if (token) {
+      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
+    }
+  }
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
@@ -93,9 +108,15 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
 }
 
 export const api = {
-  uploadDocument(file: File, onProgress?: (progress: number) => void, options?: { timeout?: number }): { promise: Promise<UploadResponse>; abort: () => void } {
+  async uploadDocument(file: File, onProgress?: (progress: number) => void, options?: { timeout?: number }): Promise<{ promise: Promise<UploadResponse>; abort: () => void }> {
     const formData = new FormData()
     formData.append('file', file)
+    
+    // Get auth token before creating XHR
+    let authToken: string | null = null
+    if (getAuthToken) {
+      authToken = await getAuthToken()
+    }
     
     const xhr = new XMLHttpRequest()
     
@@ -136,6 +157,9 @@ export const api = {
       }
       
       xhr.open('POST', `${API_BASE}/documents/upload`)
+      if (authToken) {
+        xhr.setRequestHeader('Authorization', `Bearer ${authToken}`)
+      }
       xhr.send(formData)
     })
     
